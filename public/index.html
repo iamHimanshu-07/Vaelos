@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vaelos — Smart Transport Operations Platform</title>
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#6366f1" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- Login screen -->
+  <div id="login-screen" class="login-screen">
+    <div class="login-card">
+      <div class="brand">⚡ Vaelos</div>
+      <p class="subtle">Smart Transport Operations Platform — fleet, drivers, dispatch, maintenance, AI insights, and live updates in one place.</p>
+      <form id="login-form" autocomplete="off">
+        <label>Email
+          <input type="email" id="email" required placeholder="admin@vaelos.com" />
+        </label>
+        <label>Password
+          <input type="password" id="password" required placeholder="admin123" />
+        </label>
+        <button type="submit" class="btn btn-primary btn-block">Sign in</button>
+        <div id="login-error" class="error"></div>
+      </form>
+      <details class="demo">
+        <summary>Demo accounts (click to autofill)</summary>
+        <ul>
+          <li><b>Fleet Manager</b> · admin@vaelos.com / admin123</li>
+          <li><b>Driver</b> · alex@vaelos.com / driver123</li>
+          <li><b>Safety Officer</b> · sarah@vaelos.com / safety123</li>
+          <li><b>Financial Analyst</b> · felix@vaelos.com / finance123</li>
+        </ul>
+      </details>
+    </div>
+  </div>
+
+  <!-- Main app -->
+  <div id="app" class="app hidden">
+    <aside class="sidebar">
+      <div class="brand small">⚡ Vaelos</div>
+      <div class="user-info">
+        <div class="user-name" id="user-name">—</div>
+        <span class="pill pill-blue" id="user-role">—</span>
+      </div>
+      <nav id="nav"></nav>
+      <div class="ws-status" id="ws-status" title="Live connection">
+        <span class="ws-dot offline"></span> <span class="ws-label">offline</span>
+      </div>
+      <button id="theme-toggle" class="btn btn-ghost btn-block">🌓 Theme</button>
+      <button id="logout-btn" class="btn btn-ghost btn-block">🚪 Logout</button>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <h1 id="page-title">Dashboard</h1>
+        <div class="topbar-right">
+          <button id="voice-btn" class="bell" title="Voice command">🎙️</button>
+          <button id="notif-bell" class="bell">🔔 <span id="notif-count" class="badge hidden">0</span></button>
+        </div>
+      </header>
+      <section id="content" class="content"></section>
+    </main>
+  </div>
+
+  <!-- Modal -->
+  <div id="modal-backdrop" class="modal-backdrop hidden">
+    <div class="modal" id="modal">
+      <div class="modal-head">
+        <h3 id="modal-title">Title</h3>
+        <button id="modal-close" class="btn-icon">×</button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="toast hidden"></div>
+
+  <!-- Voice feedback overlay -->
+  <div id="voice-overlay" class="voice-overlay hidden">
+    <div class="voice-pulse"></div>
+    <div class="voice-text" id="voice-text">Listening...</div>
+    <button class="btn btn-sm" id="voice-stop">Stop</button>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="app.js"></script>
+</body>
+</html>
