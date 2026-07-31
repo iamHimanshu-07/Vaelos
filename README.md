@@ -124,4 +124,4 @@ Risk = High (≥ 60) / Medium (≥ 30) / Low.
 
 ## 📜 License
 
-MIT
+Apache 2.0
