@@ -9,6 +9,9 @@
     "init-db": "node database.js",
     "test": "node test_business_rules.js"
   },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
     "better-sqlite3": "^11.5.0",
     "bcryptjs": "^2.4.3",
