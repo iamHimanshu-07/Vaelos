@@ -204,24 +204,37 @@ app.post('/api/ai', authRequired, (req, res) => {
 });
 
 // ----------------------------- Static frontend ----------------------------- //
+// Liveness probe — registered BEFORE static middleware so Railway's
+// healthcheck always gets a 200 even if index.html is mid-rebuild.
+app.get('/health', (_req, res) => res.status(200).json({ ok: true, ts: Date.now() }));
+app.get('/healthz', (_req, res) => res.status(200).end());
+
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 const PORT = process.env.PORT || 3000;
 const server = http.createServer(app);
 
-// WebSocket server for live updates
-const wss = new WebSocketServer({ server, path: '/ws' });
-wss.on('connection', (ws) => {
-  liveHub.wsClients.add(ws);
-  ws.send(JSON.stringify({ event: 'connected', data: { msg: 'live' }, ts: Date.now() }));
-  ws.on('close', () => liveHub.wsClients.delete(ws));
-});
+// WebSocket server for live updates — wrapped so a WS init error can't
+// take down the whole HTTP server (Railway healthcheck relies on HTTP).
+let wss = null;
+try {
+  wss = new WebSocketServer({ server, path: '/ws' });
+  wss.on('connection', (ws) => {
+    liveHub.wsClients.add(ws);
+    ws.send(JSON.stringify({ event: 'connected', data: { msg: 'live' }, ts: Date.now() }));
+    ws.on('close', () => liveHub.wsClients.delete(ws));
+  });
+  console.log('[vaelos] websocket server attached at /ws');
+} catch (err) {
+  console.error('[vaelos] WARNING: websocket init failed (HTTP will still serve):', err && err.message || err);
+}
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`[vaelos] listening on 0.0.0.0:${PORT}`);
   console.log(`[vaelos] HTTP:  http://0.0.0.0:${PORT}`);
   console.log(`[vaelos] WS:    ws://0.0.0.0:${PORT}/ws`);
+  console.log(`[vaelos] healthcheck: GET /healthz → 200 OK`);
 });
 
 process.on('uncaughtException', (err) => {
