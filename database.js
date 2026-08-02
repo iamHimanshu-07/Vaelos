@@ -22,11 +22,13 @@ function resolveDbPath() {
   for (const p of candidates) {
     try {
       const dir = path.dirname(p);
-      if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
-        // Make sure we can write (mkdir -p, then touch)
-        fs.mkdirSync(dir, { recursive: true });
-        return p;
-      }
+      // Make sure the parent dir exists (Railway mounts /data as an empty
+      // directory on first boot — we need to write into it immediately).
+      fs.mkdirSync(dir, { recursive: true });
+      // Verify we can write (Railway volumes are writable, project dir on
+      // Railway's runtime image may be read-only — this filters both).
+      fs.accessSync(dir, fs.constants.W_OK);
+      return p;
     } catch (_) { /* try next */ }
   }
   return path.join(__dirname, 'vaelos.db');
