@@ -1,0 +1,11 @@
+node_modules
+*.db
+*.db-wal
+*.db-shm
+.git
+.gitignore
+.DS_Store
+*.log
+cookies.txt
+.env
+.env.local
