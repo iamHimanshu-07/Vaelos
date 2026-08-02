@@ -3,10 +3,37 @@
  * Schema, auth helpers, and seed data.
  */
 const path = require('path');
+const fs = require('fs');
 const bcrypt = require('bcryptjs');
 const Database = require('better-sqlite3');
 
-const DB_PATH = process.env.VAELOS_DB || path.join(__dirname, 'vaelos.db');
+// On Railway (and other PaaS), persistent disk is only available under a
+// mounted Volume. If VAELOS_DB is set explicitly, honour it. Otherwise try a
+// list of likely Volume mount points in order, and fall back to the working
+// directory so local dev / first deploy without a volume still works.
+function resolveDbPath() {
+  if (process.env.VAELOS_DB) return process.env.VAELOS_DB;
+  const candidates = [
+    '/data/vaelos.db',
+    '/app/data/vaelos.db',
+    '/mnt/vaelos.db',
+    path.join(__dirname, 'vaelos.db'),
+  ];
+  for (const p of candidates) {
+    try {
+      const dir = path.dirname(p);
+      if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
+        // Make sure we can write (mkdir -p, then touch)
+        fs.mkdirSync(dir, { recursive: true });
+        return p;
+      }
+    } catch (_) { /* try next */ }
+  }
+  return path.join(__dirname, 'vaelos.db');
+}
+
+const DB_PATH = resolveDbPath();
+console.log(`[vaelos] using database at ${DB_PATH}`);
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
