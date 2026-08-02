@@ -14,7 +14,7 @@ const ops = require('./operations');
 
 console.log('[vaelos] booting…');
 console.log(`[vaelos] node ${process.version} | pid ${process.pid} | cwd ${process.cwd()}`);
-console.log(`[vaelos] env PORT=${process.env.PORT || '(unset, will use 3000)'} | NODE_ENV=${process.env.NODE_ENV || '(unset)'}`);
+console.log(`[vaelos] env PORT=${process.env.PORT || '(unset)'} | NODE_ENV=${process.env.NODE_ENV || '(unset)'}`);
 
 try {
   init();
@@ -206,8 +206,12 @@ app.post('/api/ai', authRequired, (req, res) => {
 // ----------------------------- Static frontend ----------------------------- //
 // Liveness probe — registered BEFORE static middleware so Railway's
 // healthcheck always gets a 200 even if index.html is mid-rebuild.
-app.get('/health', (_req, res) => res.status(200).json({ ok: true, ts: Date.now() }));
-app.get('/healthz', (_req, res) => res.status(200).end());
+app.get('/health', (_req, res) => {
+  res.status(200).json({ ok: true, ts: Date.now() });
+});
+app.get('/healthz', (_req, res) => {
+  res.status(200).end();
+});
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
