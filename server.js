@@ -12,8 +12,18 @@ const { WebSocketServer } = require('ws');
 const { init, verifyUser, recomputeLicenseNotifications } = require('./database');
 const ops = require('./operations');
 
-init();
-recomputeLicenseNotifications();
+console.log('[vaelos] booting…');
+console.log(`[vaelos] node ${process.version} | pid ${process.pid} | cwd ${process.cwd()}`);
+console.log(`[vaelos] env PORT=${process.env.PORT || '(unset, will use 3000)'} | NODE_ENV=${process.env.NODE_ENV || '(unset)'}`);
+
+try {
+  init();
+  recomputeLicenseNotifications();
+  console.log('[vaelos] database initialised ok');
+} catch (err) {
+  console.error('[vaelos] FATAL: database init failed:', err && err.stack || err);
+  process.exit(1);
+}
 
 const app = express();
 app.use(express.json());
@@ -208,7 +218,15 @@ wss.on('connection', (ws) => {
   ws.on('close', () => liveHub.wsClients.delete(ws));
 });
 
-server.listen(PORT, () => {
-  console.log(`🚚 Vaelos running on http://localhost:${PORT}`);
-  console.log(`   WebSocket: ws://localhost:${PORT}/ws`);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`[vaelos] listening on 0.0.0.0:${PORT}`);
+  console.log(`[vaelos] HTTP:  http://0.0.0.0:${PORT}`);
+  console.log(`[vaelos] WS:    ws://0.0.0.0:${PORT}/ws`);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[vaelos] uncaughtException:', err && err.stack || err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[vaelos] unhandledRejection:', reason);
 });
