@@ -104,10 +104,10 @@ app.post('/api/auth/signup', (req, res) => {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Invalid email address.' });
   if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters.' });
   if (!rateLimit('signup:' + email.toLowerCase(), 3, 5 * 60_000)) return res.status(429).json({ error: 'Too many signup attempts. Try again in 5 minutes.' });
-  // First-ever user becomes Fleet Manager; everyone else is Driver by default.
+  // First-ever user becomes Admin; everyone else is Driver by default.
   const existing = ops.listUsers();
-  const finalRole = (existing.length === 0) ? 'Fleet Manager'
-                  : (['Driver','Fleet Manager'].includes(role) ? role : 'Driver');
+  const finalRole = (existing.length === 0) ? 'Admin'
+                  : (['Driver','Admin'].includes(role) ? role : 'Driver');
   try {
     ops.addUser({ user: null }, { name: name.trim(), email: email.trim().toLowerCase(), password, role: finalRole });
     const created = require('./database').db.prepare(
@@ -127,8 +127,8 @@ app.post('/api/auth/signup', (req, res) => {
 });
 app.post('/api/auth/forgot', (req, res) => {
   // Demo-mode: no email infra, so we always 200 and tell the client
-  // to use the demo accounts or ask a Fleet Manager to reset.
-  return res.json({ ok: true, message: 'If an account exists for that email, a reset link will be sent. (Demo mode: contact your Fleet Manager.)' });
+  // to use the demo accounts or ask an Admin to reset.
+  return res.json({ ok: true, message: 'If an account exists for that email, a reset link will be sent. (Demo mode: contact an Admin.)' });
 });
 app.post('/api/auth/logout', (req, res) => {
   res.clearCookie('token'); res.json({ ok: true });
@@ -136,13 +136,13 @@ app.post('/api/auth/logout', (req, res) => {
 app.get('/api/auth/me', authRequired, (req, res) => res.json({ user: req.user }));
 
 // ----------------------------- USERS ----------------------------- //
-app.get('/api/users', authRequired, requireRole('Fleet Manager'), (req, res) =>
+app.get('/api/users', authRequired, requireRole('Admin'), (req, res) =>
   res.json(ops.listUsers()));
-app.post('/api/users', authRequired, requireRole('Fleet Manager'), (req, res) => {
+app.post('/api/users', authRequired, requireRole('Admin'), (req, res) => {
   try { ops.addUser(ctx(req), req.body); broadcast('user.create'); res.json({ ok: true }); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
-app.delete('/api/users/:id', authRequired, requireRole('Fleet Manager'), (req, res) => {
+app.delete('/api/users/:id', authRequired, requireRole('Admin'), (req, res) => {
   ops.deleteUser(ctx(req), +req.params.id); broadcast('user.delete'); res.json({ ok: true });
 });
 
@@ -245,9 +245,10 @@ app.post('/api/expenses', authRequired, (req, res) => {
 // ----------------------------- ANALYTICS & EXTRA ----------------------------- //
 app.get('/api/kpis', authRequired, (req, res) => res.json(ops.dashboardKpis(req.user.email)));
 app.get('/api/metrics', authRequired, (req, res) => res.json(ops.vehicleMetrics(req.user.email)));
-app.get('/api/notifications', authRequired, (req, res) => res.json(ops.listNotifications()));
+app.get('/api/notifications', authRequired, (req, res) =>
+  res.json(ops.listNotifications(req.user.email)));
 app.post('/api/notifications/read-all', authRequired, (req, res) => {
-  ops.markAllNotificationsRead(); res.json({ ok: true });
+  ops.markAllNotificationsRead(req.user.email); res.json({ ok: true });
 });
 app.get('/api/audit', authRequired, (req, res) => {
   // Everyone (including the owner) sees only their own actions by default.

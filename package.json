@@ -1,6 +1,7 @@
 {
   "name": "vaelos",
   "version": "1.0.0",
+  "releaseName": "Vaelos v1.0 — Admin & Driver",
   "description": "Smart Transport Operations Platform",
   "main": "server.js",
   "type": "commonjs",

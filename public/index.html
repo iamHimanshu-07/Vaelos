@@ -6,6 +6,7 @@
   <title>Vaelos — Smart Transport Operations Platform</title>
   <link rel="manifest" href="manifest.json" />
   <meta name="theme-color" content="#6366f1" />
+  <meta name="vaelos-version" content="1.0" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
         integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
@@ -61,7 +62,7 @@
               <summary>Or try a demo account</summary>
               <div class="demo-line">
                 <button type="button" class="demo-btn primary" data-fill='{"email":"admin@vaelos.com","password":"admin123"}'>
-                  <span class="demo-role">Fleet Manager</span>
+                  <span class="demo-role">Admin</span>
                   <span class="demo-creds">admin@vaelos.com / admin123</span>
                 </button>
               </div>
@@ -93,7 +94,7 @@
               <label>Role
                 <select id="su-role">
                   <option value="Driver">Driver</option>
-                  <option value="Fleet Manager">Fleet Manager</option>
+                  <option value="Admin">Admin</option>
                 </select>
               </label>
               <button type="submit" class="btn btn-primary btn-block">Create account</button>

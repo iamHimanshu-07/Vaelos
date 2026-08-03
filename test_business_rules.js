@@ -40,7 +40,7 @@ function fresh() {
   await test('BR1 — Vehicle + driver registration', () => {
     const db = fresh();
     const ops = require('./operations');
-    const ctx = { user: { id: 1, name: 'Admin', role: 'Fleet Manager' } };
+    const ctx = { user: { id: 1, name: 'Admin', role: 'Admin' } };
     const beforeV = ops.listVehicles().length;
     const beforeD = ops.listDrivers().length;
     ops.addVehicle(ctx, { reg_no: 'TEST-T01', name: 'Test Van 1',
@@ -58,7 +58,7 @@ function fresh() {
   await test('BR2 — Cargo > capacity rejected', () => {
     const db = fresh();
     const ops = require('./operations');
-    const ctx = { user: { id: 1, role: 'Fleet Manager' } };
+    const ctx = { user: { id: 1, role: 'Admin' } };
     ops.addVehicle(ctx, { reg_no: 'TEST-T02', name: 'V', type: 'Van',
                           max_load_kg: 500, odometer_km: 0,
                           acquisition_cost: 800000, region: 'Central' });
@@ -79,7 +79,7 @@ function fresh() {
   await test('BR3 — Dispatch sets vehicle/driver to On Trip', () => {
     const db = fresh();
     const ops = require('./operations');
-    const ctx = { user: { id: 1, role: 'Fleet Manager' } };
+    const ctx = { user: { id: 1, role: 'Admin' } };
     ops.addVehicle(ctx, { reg_no: 'TEST-T03', name: 'V', type: 'Van',
                           max_load_kg: 500, odometer_km: 0,
                           acquisition_cost: 800000, region: 'Central' });
@@ -106,7 +106,7 @@ function fresh() {
   await test('BR4 — Expired license blocks driver assignment', () => {
     const db = fresh();
     const ops = require('./operations');
-    const ctx = { user: { id: 1, role: 'Fleet Manager' } };
+    const ctx = { user: { id: 1, role: 'Admin' } };
     ops.addVehicle(ctx, { reg_no: 'TEST-T04', name: 'V', type: 'Van',
                           max_load_kg: 500, odometer_km: 0,
                           acquisition_cost: 800000, region: 'Central' });
@@ -127,7 +127,7 @@ function fresh() {
   await test('BR5 — Maintenance sets vehicle to In Shop', () => {
     const db = fresh();
     const ops = require('./operations');
-    const ctx = { user: { id: 1, role: 'Fleet Manager' } };
+    const ctx = { user: { id: 1, role: 'Admin' } };
     ops.addVehicle(ctx, { reg_no: 'TEST-T05', name: 'V', type: 'Van',
                           max_load_kg: 500, odometer_km: 0,
                           acquisition_cost: 800000, region: 'Central' });
@@ -143,7 +143,7 @@ function fresh() {
   await test('BR6 — Closing last maintenance restores Available', () => {
     const db = fresh();
     const ops = require('./operations');
-    const ctx = { user: { id: 1, role: 'Fleet Manager' } };
+    const ctx = { user: { id: 1, role: 'Admin' } };
     ops.addVehicle(ctx, { reg_no: 'TEST-T06', name: 'V', type: 'Van',
                           max_load_kg: 500, odometer_km: 0,
                           acquisition_cost: 800000, region: 'Central' });
@@ -162,7 +162,7 @@ function fresh() {
   await test('BR7 — Vehicle metrics include fuel efficiency', () => {
     const db = fresh();
     const ops = require('./operations');
-    const ctx = { user: { id: 1, role: 'Fleet Manager' } };
+    const ctx = { user: { id: 1, role: 'Admin' } };
     ops.addVehicle(ctx, { reg_no: 'TEST-T07', name: 'V', type: 'Van',
                           max_load_kg: 500, odometer_km: 0,
                           acquisition_cost: 800000, region: 'Central' });
@@ -190,7 +190,7 @@ function fresh() {
   await test('BR8 — License-expiry notification generated', () => {
     const db = fresh();
     const ops = require('./operations');
-    const ctx = { user: { id: 1, role: 'Fleet Manager' } };
+    const ctx = { user: { id: 1, role: 'Admin' } };
     ops.addDriver(ctx, { name: 'Expiring', license_no: 'TEST-D08',
                          license_category: 'LMV',
                          license_expiry: new Date(Date.now() + 10*24*3600*1000)
@@ -207,7 +207,7 @@ function fresh() {
   await test('BR9 — KPIs return required fields', () => {
     const db = fresh();
     const ops = require('./operations');
-    const ctx = { user: { id: 1, role: 'Fleet Manager' } };
+    const ctx = { user: { id: 1, role: 'Admin' } };
     ops.addVehicle(ctx, { reg_no: 'TEST-T09', name: 'V', type: 'Van',
                           max_load_kg: 500, odometer_km: 0,
                           acquisition_cost: 800000, region: 'Central' });
@@ -222,7 +222,7 @@ function fresh() {
   await test('BR10 — Driver returns to Available after trip completion', () => {
     const db = fresh();
     const ops = require('./operations');
-    const ctx = { user: { id: 1, role: 'Fleet Manager' } };
+    const ctx = { user: { id: 1, role: 'Admin' } };
     ops.addVehicle(ctx, { reg_no: 'TEST-T10', name: 'V', type: 'Van',
                           max_load_kg: 500, odometer_km: 0,
                           acquisition_cost: 800000, region: 'Central' });
@@ -248,7 +248,7 @@ function fresh() {
   await test('Rare — Audit log captures all mutations', () => {
     const db = fresh();
     const ops = require('./operations');
-    const ctx = { user: { id: 1, name: 'Admin', role: 'Fleet Manager' } };
+    const ctx = { user: { id: 1, name: 'Admin', role: 'Admin' } };
     ops.addVehicle(ctx, { reg_no: 'TEST-A1', name: 'V', type: 'Van',
                           max_load_kg: 500, odometer_km: 0,
                           acquisition_cost: 800000, region: 'Central' });
@@ -260,7 +260,7 @@ function fresh() {
   await test('Rare — Predictive maintenance returns risk classification', () => {
     const db = fresh();
     const ops = require('./operations');
-    const ctx = { user: { id: 1, role: 'Fleet Manager' } };
+    const ctx = { user: { id: 1, role: 'Admin' } };
     ops.addVehicle(ctx, { reg_no: 'TEST-P1', name: 'Old Van', type: 'Van',
                           max_load_kg: 500, odometer_km: 80000,
                           acquisition_cost: 800000, region: 'Central' });
@@ -276,7 +276,7 @@ function fresh() {
   await test('Rare — Leaderboard ranks drivers by safety score', () => {
     const db = fresh();
     const ops = require('./operations');
-    const ctx = { user: { id: 1, role: 'Fleet Manager' } };
+    const ctx = { user: { id: 1, role: 'Admin' } };
     ops.addDriver(ctx, { name: 'Top', license_no: 'TEST-L1',
                          license_category: 'LMV', license_expiry: '2030-01-01',
                          contact: '1', safety_score: 99 });
@@ -299,7 +299,7 @@ function fresh() {
   await test('Rare — AI assistant answers natural-language questions', () => {
     const db = fresh();
     const ops = require('./operations');
-    const ctx = { user: { id: 1, role: 'Fleet Manager' } };
+    const ctx = { user: { id: 1, role: 'Admin' } };
     ops.addVehicle(ctx, { reg_no: 'TEST-AI1', name: 'V', type: 'Van',
                           max_load_kg: 500, odometer_km: 0,
                           acquisition_cost: 800000, region: 'Central' });

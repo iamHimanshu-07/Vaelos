@@ -1,5 +1,5 @@
 // Vaelos service worker — offline shell
-const CACHE = 'vaelos-v8';
+const CACHE = 'vaelos-v9';
 const ASSETS = ['/', '/index.html', '/style.css', '/app.js', '/manifest.json',
                 '/icon-192.svg', '/icon-512.svg'];
 

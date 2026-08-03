@@ -342,9 +342,9 @@ const NAV_ITEMS = [
   { id: 'fuel',          label: '⛽ Fuel & Expenses',    roles: ['*'],                       group: 'Finance' },
   { id: 'reports',       label: '📈 Reports',            roles: ['*'],                       group: 'Finance' },
   { id: 'leaderboard',   label: '🏆 Leaderboard',        roles: ['*'],                       group: 'People' },
-  { id: 'predictive',    label: '🔮 Predictive AI',      roles: ['Fleet Manager'],             group: 'Insights' },
-  { id: 'audit',         label: '📋 Audit Log',          roles: ['Fleet Manager'],             group: 'Admin' },
-  { id: 'users',         label: '👥 Users',              roles: ['Fleet Manager'],           group: 'Admin' },
+  { id: 'predictive',    label: '🔮 Predictive AI',      roles: ['Admin'],             group: 'Insights' },
+  { id: 'audit',         label: '📋 Audit Log',          roles: ['Admin'],             group: 'Admin' },
+  { id: 'users',         label: '👥 Users',              roles: ['Admin'],           group: 'Admin' },
   { id: 'ai',            label: '🤖 AI Assistant',       roles: ['*'],                       hideInNav: true },
 ];
 
@@ -908,21 +908,28 @@ function jitter(xy, seed, region) {
 
 async function renderMap(c) {
   c.innerHTML = `
-    <div class="card">
+    <div class="card map-card">
       <div class="flex-between mb-1">
-        <h3>🗺️ Live Fleet Map — Vaelos</h3>
-        <div class="text-soft">Click markers for vehicle info · Routes shown for dispatched trips</div>
+        <h3>🗺️ Live Fleet Map</h3>
+        <div class="text-soft">Tap a marker for details · dashed lines show active trips</div>
       </div>
-      <div id="map"></div>
+      <div class="map-shell">
+        <div id="map" class="gm-style"></div>
+        <div class="gm-search">
+          <span class="gm-search-ico">🔍</span>
+          <input id="gm-search-input" placeholder="Search this area" autocomplete="off" />
+        </div>
+        <div class="gm-attr">© Vaelos Maps</div>
+      </div>
       <div class="map-legend">
-        <span class="legend-item"><span class="legend-dot van"></span> Van</span>
-        <span class="legend-item"><span class="legend-dot truck"></span> Truck</span>
-        <span class="legend-item"><span class="legend-dot car"></span> Car</span>
-        <span class="legend-item"><span class="legend-dot bus"></span> Bus</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#16a34a"></span> Available</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#2563eb"></span> On Trip</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#f59e0b"></span> In Shop</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#94a3b8"></span> Retired</span>
         <span class="legend-item legend-route">━━ Active route</span>
       </div>
       <div class="text-soft mt-1" style="font-size:.8rem">
-        📍 Markers use region/seed positions for demo. Map data © OpenStreetMap contributors.
+        📍 Marker positions use the fleet's seeded regions. Tiles by CARTO / OSM.
       </div>
     </div>
   `;
@@ -932,36 +939,53 @@ async function renderMap(c) {
   const vehicles = await api('/vehicles');
   const trips = await api('/trips?status=Dispatched');
 
-  state.map = L.map('map').setView([22.5937, 78.9629], 5);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  state.map = L.map('map', {
+    zoomControl: false,
+    attributionControl: false,
+  }).setView([22.5937, 78.9629], 5);
+
+  // Light, road-style tiles — closest free aesthetic to Google Maps.
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    subdomains: 'abcd',
     maxZoom: 19,
-    attribution: '© OpenStreetMap'
   }).addTo(state.map);
+
+  // Move the zoom control to the right side, like Google Maps.
+  L.control.zoom({ position: 'topright' }).addTo(state.map);
 
   const colorOf = (status) => ({
     'Available':'#16a34a','On Trip':'#2563eb','In Shop':'#f59e0b','Retired':'#94a3b8'
   }[status] || '#6366f1');
 
-  // SVG icons per vehicle type — a colored "logo" so Van/Truck/Car/Bus
-  // are visually distinct on the map.
-  const TYPE_GLYPH = {
-    'Van':   '🚐',
-    'Truck': '🚛',
-    'Car':   '🚗',
-    'Bus':   '🚌',
-  };
+  // Pin-shaped markers in the Google-Maps style: drop shadow + colored pin
+  // body, with a small vehicle-type glyph inside the dot.
+  const TYPE_GLYPH = { 'Van':'🚐','Truck':'🚛','Car':'🚗','Bus':'🚌' };
   function iconFor(v) {
     const color = colorOf(v.status);
     const glyph = TYPE_GLYPH[v.type] || '🚐';
     return L.divIcon({
-      className: 'vaelos-marker',
+      className: 'vaelos-pin',
+      iconSize: [32, 42],
+      iconAnchor: [16, 42],
+      popupAnchor: [0, -36],
       html: `
-        <div class="marker-ring" style="--ring:${color}"></div>
-        <div class="marker-body" style="background:${color};--ring:${color}"><span>${glyph}</span></div>
-      `,
-      iconSize: [38, 38],
-      iconAnchor: [19, 19],
-      popupAnchor: [0, -18],
+        <div class="pin-wrap" style="--pin:${color}">
+          <div class="pin-shadow"></div>
+          <div class="pin-body"><span class="pin-glyph">${glyph}</span></div>
+        </div>`,
+    });
+  }
+
+  // Wire up the "Search this area" fake input: pressing Enter recenters.
+  const searchInput = $('#gm-search-input');
+  if (searchInput) {
+    searchInput.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      const q = searchInput.value.trim();
+      if (!q) return;
+      const hit = coordsForPlace(q, q);
+      if (hit) state.map.setView(hit, 9, { animate: true });
     });
   }
 
@@ -969,19 +993,22 @@ async function renderMap(c) {
   for (const v of vehicles) {
     const base = coordsForPlace(v.region, v.region);
     const [lat, lng] = jitter(base, v.reg_no + v.id, v.region);
-    const m = L.marker([lat, lng], { icon: iconFor(v) }).addTo(state.map);
+    const m = L.marker([lat, lng], { icon: iconFor(v), riseOnHover: true }).addTo(state.map);
     const cur = Number(v.current_load_kg || 0);
     const max = Number(v.max_load_kg || 0);
     const pct = max > 0 ? Math.min(100, Math.round((cur / max) * 100)) : 0;
     const overCap = max > 0 && cur > max;
     m.bindPopup(`
-      <h4>${escapeHtml(v.reg_no)} · ${escapeHtml(v.name)}</h4>
-      <div class="pop-line">Type: <b>${escapeHtml(v.type)}</b></div>
-      <div class="pop-line">Region: ${escapeHtml(v.region)}</div>
-      <div class="pop-line">Current load: <b>${fmtKm(cur)}</b> / ${fmtKm(max)} kg (${pct}%)${overCap ? ' <span style="color:#ef4444">⚠ over capacity</span>' : ''}</div>
-      <div class="pop-line">Odometer: ${v.odometer_km.toLocaleString('en-IN')} km</div>
-      <div class="pop-line">Status: ${statusPill(v.status)}</div>
-    `);
+      <div class="gm-pop">
+        <div class="gm-pop-title">${escapeHtml(v.reg_no)}</div>
+        <div class="gm-pop-sub">${escapeHtml(v.name)} · ${escapeHtml(v.type)}</div>
+        <div class="gm-pop-row"><span class="gm-pop-k">Region</span><span>${escapeHtml(v.region)}</span></div>
+        <div class="gm-pop-row"><span class="gm-pop-k">Load</span><span><b>${fmtKm(cur)}</b> / ${fmtKm(max)} kg (${pct}%)</span></div>
+        <div class="gm-pop-row"><span class="gm-pop-k">Odometer</span><span>${v.odometer_km.toLocaleString('en-IN')} km</span></div>
+        <div class="gm-pop-row"><span class="gm-pop-k">Status</span><span>${statusPill(v.status)}</span></div>
+        ${overCap ? '<div class="gm-pop-warn">⚠ Over capacity</div>' : ''}
+      </div>
+    `, { className: 'gm-popup', maxWidth: 280, minWidth: 240 });
     state.mapMarkers.push(m);
   }
 
@@ -992,9 +1019,16 @@ async function renderMap(c) {
     const dst = coordsForPlace(t.destination, v?.region);
     if (!src || !dst || src === dst) continue;
     const route = L.polyline([src, dst], {
-      color: '#6366f1', weight: 4, dashArray: '8,8', opacity: .85
+      color: '#1a73e8', weight: 5, opacity: .9,
+      lineCap: 'round', lineJoin: 'round',
     }).addTo(state.map);
-    route.bindPopup(`<b>Active Trip</b><br>${escapeHtml(t.source)} → ${escapeHtml(t.destination)}${v ? `<br>Vehicle: ${escapeHtml(v.reg_no)}` : ''}`);
+    route.bindPopup(`
+      <div class="gm-pop">
+        <div class="gm-pop-title">Active Trip</div>
+        <div class="gm-pop-sub">${escapeHtml(t.source)} → ${escapeHtml(t.destination)}</div>
+        ${v ? `<div class="gm-pop-row"><span class="gm-pop-k">Vehicle</span><span>${escapeHtml(v.reg_no)}</span></div>` : ''}
+      </div>
+    `, { className: 'gm-popup', maxWidth: 280, minWidth: 240 });
   }
 }
 
@@ -1820,8 +1854,8 @@ async function renderNotifications(c) {
 
 // =================== Users =================== //
 async function renderUsers(c) {
-  if (state.user.role !== 'Fleet Manager') {
-    c.innerHTML = `<div class="card"><p>⚠️ Only Fleet Managers can manage users.</p></div>`; return;
+  if (state.user.role !== 'Admin') {
+    c.innerHTML = `<div class="card"><p>⚠️ Only Admins can manage users.</p></div>`; return;
   }
   const users = await api('/users');
   c.innerHTML = `
@@ -1844,7 +1878,7 @@ async function renderUsers(c) {
       <div class="form-row"><label>Password*</label><input id="f-pw" type="password"/></div>
       <div class="form-row"><label>Role*</label>
         <select id="f-role">
-          <option>Fleet Manager</option><option>Driver</option>
+          <option>Admin</option><option>Driver</option>
         </select></div>
       <button class="btn btn-primary" id="save-u">Create User</button>
     </div>
@@ -2120,7 +2154,7 @@ function handleVoiceCommand(t) {
       if (page) {
         e.preventDefault();
         navigate(page);
-        if (state.user && state.user.role !== 'Fleet Manager' &&
+        if (state.user && state.user.role !== 'Admin' &&
             (page === 'audit' || page === 'predictive' || page === 'users')) {
           // role-gated pages will be guarded inside the renderer too
         }

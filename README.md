@@ -1,5 +1,7 @@
 # ⚡ Vaelos — Smart Transport Operations Platform
 
+> **v1.0** — Production-ready. Admin & Driver roles, Google-Maps-style live map, AI assistant, predictive maintenance, leaderboard, owner email notifications.
+
 **Vaelos** is a fleet operations platform for managing vehicles, drivers, trips, maintenance, fuel, expenses, and AI-driven insights in one place. Built for hackathon scale — fast, self-contained, and PWA-installable.
 
 > **Stack:** Node.js + Express + better-sqlite3 + WebSockets · Vanilla JS frontend · Leaflet maps · Progressive Web App
@@ -9,7 +11,7 @@
 ## ✨ Features
 
 ### Core (10 mandatory business rules)
-- **Authentication** — JWT in httpOnly cookies, 2 roles (Fleet Manager, Driver)
+- **Authentication** — JWT in httpOnly cookies, 2 roles (Admin, Driver)
 - **Vehicles** — Full CRUD, capacity & odometer tracking, status (Available / On Trip / In Shop / Retired)
 - **Drivers** — License expiry tracking with auto-notifications (expired / expiring soon)
 - **Trips** — Draft → Dispatched → Completed / Cancelled lifecycle with cargo, distance, and revenue
@@ -42,10 +44,10 @@ npm start            # http://localhost:3000
 
 Then sign in with one of the demo accounts:
 
-| Role          | Email              | Password  |
-|---------------|--------------------|-----------|
-| Fleet Manager | admin@vaelos.com   | admin123  |
-| Driver        | alex@vaelos.com    | driver123 |
+| Role   | Email              | Password  |
+|--------|--------------------|-----------|
+| Admin  | admin@vaelos.com   | admin123  |
+| Driver | alex@vaelos.com    | driver123 |
 
 ---
 

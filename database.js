@@ -66,7 +66,7 @@ function init() {
       name TEXT NOT NULL,
       email TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
-      role TEXT NOT NULL CHECK (role IN ('Fleet Manager','Driver')),
+      role TEXT NOT NULL CHECK (role IN ('Admin','Driver')),
       created_at TEXT NOT NULL
     );
 
@@ -160,7 +160,8 @@ function init() {
       message TEXT NOT NULL,
       target_id INTEGER,
       created_at TEXT NOT NULL,
-      read INTEGER NOT NULL DEFAULT 0
+      read INTEGER NOT NULL DEFAULT 0,
+      _demo_owner TEXT
     );
 
     CREATE TABLE IF NOT EXISTS audit_log (
@@ -195,10 +196,13 @@ function init() {
     "ALTER TABLE fuel_logs ADD COLUMN _demo_owner TEXT",
     "ALTER TABLE expenses ADD COLUMN _demo_owner TEXT",
     "ALTER TABLE maintenance ADD COLUMN _demo_owner TEXT",
+    "ALTER TABLE notifications ADD COLUMN _demo_owner TEXT",
     "ALTER TABLE users ADD COLUMN driver_id INTEGER",
   ]) {
     try { db.exec(stmt); } catch (_) { /* column already exists */ }
   }
+  // Role rename: Fleet Manager → Admin (one-time data migration).
+  try { db.exec("UPDATE users SET role='Admin' WHERE role='Fleet Manager'"); } catch (_) {}
 
   const userCount = db.prepare('SELECT COUNT(*) c FROM users').get().c;
   if (userCount === 0) seed();
@@ -227,61 +231,97 @@ function ensureDemoClone(email) {
   const e = String(email || '').toLowerCase();
   if (!isDemoEmail(e)) return;
   const existing = db.prepare('SELECT email FROM demo_sessions WHERE email=?').get(e);
-  if (existing) return; // already cloned for this email
   const now = new Date().toISOString().slice(0, 19);
-  const scope = DEMO_SCOPE[e];
-  db.prepare('INSERT INTO demo_sessions (email, scope, created_at) VALUES (?,?,?)')
-    .run(e, scope, now);
+  if (!existing) {
+    const scope = DEMO_SCOPE[e];
+    db.prepare('INSERT INTO demo_sessions (email, scope, created_at) VALUES (?,?,?)')
+      .run(e, scope, now);
+  }
 
-  // Clone the seed rows (those with _demo_owner IS NULL) so each demo email
-  // sees its own copy. Idempotent: only rows where _demo_owner IS NULL
-  // are duplicated; subsequent clones are skipped.
-  const clone = (table, idCol, rowMapper) => {
-    const rows = db.prepare(`SELECT * FROM ${table} WHERE _demo_owner IS NULL`).all();
-    for (const r of rows) {
-      const mapped = rowMapper(r);
-      db.prepare(
-        `INSERT INTO ${table} (_demo_owner, ${Object.keys(mapped).join(',')})` +
-        ` VALUES (?, ${Object.keys(mapped).map(() => '?').join(',')})`
-      ).run(e, ...Object.values(mapped));
+  // First-time clone of all seed rows so the demo user has their own
+  // workspace. Skipped on subsequent logins (existing !== null) because
+  // their prior clones persist.
+  if (!existing) {
+    const clone = (table, idCol, rowMapper) => {
+      const rows = db.prepare(`SELECT * FROM ${table} WHERE _demo_owner IS NULL`).all();
+      for (const r of rows) {
+        const mapped = rowMapper(r);
+        db.prepare(
+          `INSERT INTO ${table} (_demo_owner, ${Object.keys(mapped).join(',')})` +
+          ` VALUES (?, ${Object.keys(mapped).map(() => '?').join(',')})`
+        ).run(e, ...Object.values(mapped));
+      }
+    };
+
+    clone('vehicles', 'id', (v) => ({
+      reg_no: v.reg_no, name: v.name, type: v.type,
+      max_load_kg: v.max_load_kg, odometer_km: v.odometer_km,
+      acquisition_cost: v.acquisition_cost, region: v.region,
+      status: v.status, created_at: v.created_at,
+    }));
+    clone('drivers', 'id', (d) => ({
+      name: d.name, license_no: d.license_no, license_category: d.license_category,
+      license_expiry: d.license_expiry, contact: d.contact,
+      safety_score: d.safety_score, status: d.status, created_at: d.created_at,
+    }));
+    clone('maintenance', 'id', (m) => ({
+      vehicle_id: m.vehicle_id, description: m.description, cost: m.cost,
+      start_date: m.start_date, end_date: m.end_date, status: m.status,
+      notes: m.notes, created_at: m.created_at,
+    }));
+    clone('trips', 'id', (t) => ({
+      source: t.source, destination: t.destination, vehicle_id: t.vehicle_id,
+      driver_id: t.driver_id, cargo_kg: t.cargo_kg,
+      planned_distance_km: t.planned_distance_km, status: t.status,
+      start_odometer: t.start_odometer, end_odometer: t.end_odometer,
+      fuel_used_liters: t.fuel_used_liters, revenue: t.revenue,
+      dispatched_at: t.dispatched_at, completed_at: t.completed_at,
+      created_at: t.created_at,
+    }));
+    clone('fuel_logs', 'id', (f) => ({
+      vehicle_id: f.vehicle_id, trip_id: f.trip_id, liters: f.liters,
+      cost: f.cost, log_date: f.log_date, odometer_km: f.odometer_km,
+      created_at: f.created_at,
+    }));
+    clone('expenses', 'id', (x) => ({
+      vehicle_id: x.vehicle_id, trip_id: x.trip_id, category: x.category,
+      description: x.description, amount: x.amount, expense_date: x.expense_date,
+      created_at: x.created_at,
+    }));
+  }
+
+  // Always recompute license notifications for the demo's cloned drivers —
+  // their expiry dates move day-to-day, so refreshing on every login keeps
+  // the bell badge accurate.
+  recomputeDemoLicenseNotifications(e);
+}
+
+function recomputeDemoLicenseNotifications(email) {
+  const e = String(email).toLowerCase();
+  db.prepare(`DELETE FROM notifications WHERE _demo_owner = ?`).run(e);
+  const drivers = db.prepare(
+    `SELECT id, name, license_no, license_expiry FROM drivers WHERE _demo_owner = ?`
+  ).all(e);
+  const today = new Date();
+  const ins = db.prepare(
+    `INSERT INTO notifications (kind, message, target_id, created_at, read, _demo_owner)
+     VALUES (?,?,?,?,?,?)`
+  );
+  const now = new Date().toISOString().slice(0, 19);
+  for (const d of drivers) {
+    if (!d.license_expiry) continue;
+    const exp = new Date(d.license_expiry);
+    const delta = Math.floor((exp - today) / (1000 * 3600 * 24));
+    if (delta < 0) {
+      ins.run('license_expiry',
+        `EXPIRED: ${d.name} (${d.license_no}) — expired ${-delta} days ago.`,
+        d.id, now, 0, e);
+    } else if (delta <= 60) {
+      ins.run('license_expiry',
+        `Expiring soon: ${d.name} (${d.license_no}) — expires in ${delta} days.`,
+        d.id, now, 0, e);
     }
-  };
-
-  clone('vehicles', 'id', (v) => ({
-    reg_no: v.reg_no, name: v.name, type: v.type,
-    max_load_kg: v.max_load_kg, odometer_km: v.odometer_km,
-    acquisition_cost: v.acquisition_cost, region: v.region,
-    status: v.status, created_at: v.created_at,
-  }));
-  clone('drivers', 'id', (d) => ({
-    name: d.name, license_no: d.license_no, license_category: d.license_category,
-    license_expiry: d.license_expiry, contact: d.contact,
-    safety_score: d.safety_score, status: d.status, created_at: d.created_at,
-  }));
-  clone('maintenance', 'id', (m) => ({
-    vehicle_id: m.vehicle_id, description: m.description, cost: m.cost,
-    start_date: m.start_date, end_date: m.end_date, status: m.status,
-    notes: m.notes, created_at: m.created_at,
-  }));
-  clone('trips', 'id', (t) => ({
-    source: t.source, destination: t.destination, vehicle_id: t.vehicle_id,
-    driver_id: t.driver_id, cargo_kg: t.cargo_kg,
-    planned_distance_km: t.planned_distance_km, status: t.status,
-    start_odometer: t.start_odometer, end_odometer: t.end_odometer,
-    fuel_used_liters: t.fuel_used_liters, revenue: t.revenue,
-    dispatched_at: t.dispatched_at, completed_at: t.completed_at,
-    created_at: t.created_at,
-  }));
-  clone('fuel_logs', 'id', (f) => ({
-    vehicle_id: f.vehicle_id, trip_id: f.trip_id, liters: f.liters,
-    cost: f.cost, log_date: f.log_date, odometer_km: f.odometer_km,
-    created_at: f.created_at,
-  }));
-  clone('expenses', 'id', (x) => ({
-    vehicle_id: x.vehicle_id, trip_id: x.trip_id, category: x.category,
-    description: x.description, amount: x.amount, expense_date: x.expense_date,
-    created_at: x.created_at,
-  }));
+  }
 }
 
 function linkDriverAccounts() {
@@ -312,7 +352,7 @@ function seed() {
   const hash = (pw) => bcrypt.hashSync(pw, 10);
 
   const users = [
-    ['Admin Vaelos', 'admin@vaelos.com', 'admin123', 'Fleet Manager'],
+    ['Admin Vaelos', 'admin@vaelos.com', 'admin123', 'Admin'],
     ['Alex Driver',  'alex@vaelos.com',  'driver123', 'Driver'],
   ];
   const insUser = db.prepare(
@@ -394,8 +434,12 @@ function seed() {
 }
 
 function recomputeLicenseNotifications() {
-  db.prepare("DELETE FROM notifications WHERE kind = 'license_expiry'").run();
-  const drivers = db.prepare('SELECT id,name,license_no,license_expiry FROM drivers').all();
+  // Only touch GLOBAL notifications. Demo-owned notifications are managed
+  // per user by recomputeDemoLicenseNotifications(email) on each demo login.
+  db.prepare("DELETE FROM notifications WHERE kind = 'license_expiry' AND _demo_owner IS NULL").run();
+  const drivers = db.prepare(
+    'SELECT id,name,license_no,license_expiry FROM drivers WHERE _demo_owner IS NULL'
+  ).all();
   const today = new Date();
   const ins = db.prepare(
     `INSERT INTO notifications (kind,message,target_id,created_at,read)

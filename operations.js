@@ -395,11 +395,17 @@ function vehicleMetrics(viewerEmail) {
   });
 }
 
-function listNotifications() {
-  return db.prepare('SELECT * FROM notifications ORDER BY id DESC').all();
+function listNotifications(viewerEmail) {
+  // Filter to the viewer's owned rows. Real users see global notifications
+  // (_demo_owner IS NULL); demo users see only their cloned notifications.
+  const f = demoFilter(viewerEmail);
+  return db.prepare(
+    `SELECT * FROM notifications WHERE ${f.where} ORDER BY id DESC`
+  ).all(...f.args);
 }
-function markAllNotificationsRead() {
-  db.prepare('UPDATE notifications SET read = 1').run();
+function markAllNotificationsRead(viewerEmail) {
+  const f = demoFilter(viewerEmail);
+  db.prepare(`UPDATE notifications SET read = 1 WHERE ${f.where}`).run(...f.args);
 }
 
 function listAudit(limit = 100, opts = {}) {
