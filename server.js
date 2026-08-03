@@ -107,7 +107,7 @@ app.post('/api/auth/signup', (req, res) => {
   // First-ever user becomes Fleet Manager; everyone else is Driver by default.
   const existing = ops.listUsers();
   const finalRole = (existing.length === 0) ? 'Fleet Manager'
-                  : (['Driver','Safety Officer','Financial Analyst','Fleet Manager'].includes(role) ? role : 'Driver');
+                  : (['Driver','Fleet Manager'].includes(role) ? role : 'Driver');
   try {
     ops.addUser({ user: null }, { name: name.trim(), email: email.trim().toLowerCase(), password, role: finalRole });
     const created = require('./database').db.prepare(
@@ -255,7 +255,13 @@ app.get('/api/audit', authRequired, (req, res) => {
   const wantAll = String(req.query.scope || '').toLowerCase() === 'all';
   const isOwner = String(req.user.email || '').toLowerCase() === 'itshimanshu666@gmail.com';
   const scope = (wantAll && isOwner) ? 'all' : 'me';
-  res.json(ops.listAudit(+req.query.limit || 100, { scope, actorEmail: req.user.email }));
+  try {
+    const rows = ops.listAudit(+req.query.limit || 100, { scope, actorEmail: req.user.email });
+    res.json(Array.isArray(rows) ? rows : []);
+  } catch (e) {
+    console.error('[vaelos] /api/audit failed:', e && e.message || e);
+    res.status(500).json({ error: 'Failed to load audit log' });
+  }
 });
 app.get('/api/predictive-maintenance', authRequired, (req, res) =>
   res.json(ops.predictiveMaintenance(req.user.email)));

@@ -138,9 +138,10 @@ body {
 }
 .auth-side-inner { position: relative; z-index: 1; height: 100%; display: flex; flex-direction: column; gap: 1.2rem; }
 .brand.big {
-  font-size: 2.1rem; font-weight: 800;
+  font-size: 2.25rem; font-weight: 900; letter-spacing: -.5px;
   background: linear-gradient(90deg, #ffffff, #93c5fd);
   -webkit-background-clip: text; background-clip: text; color: transparent;
+  text-shadow: 0 2px 8px rgba(99,102,241,.25);
 }
 .auth-tagline { color: rgba(255,255,255,.75); font-size: 1rem; margin: -.3rem 0 .6rem; }
 .auth-features { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: .85rem; }
@@ -355,6 +356,7 @@ body {
 .sidebar .brand.small {
   background: linear-gradient(90deg, var(--primary), var(--accent));
   -webkit-background-clip: text; background-clip: text; color: transparent;
+  font-weight: 900; letter-spacing: -.3px;
 }
 
 #nav { display: flex; flex-direction: column; gap: .25rem; margin-top: .25rem; }

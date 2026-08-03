@@ -9,7 +9,7 @@
 ## ✨ Features
 
 ### Core (10 mandatory business rules)
-- **Authentication** — JWT in httpOnly cookies, 4 roles (Fleet Manager, Driver, Safety Officer, Financial Analyst)
+- **Authentication** — JWT in httpOnly cookies, 2 roles (Fleet Manager, Driver)
 - **Vehicles** — Full CRUD, capacity & odometer tracking, status (Available / On Trip / In Shop / Retired)
 - **Drivers** — License expiry tracking with auto-notifications (expired / expiring soon)
 - **Trips** — Draft → Dispatched → Completed / Cancelled lifecycle with cargo, distance, and revenue
@@ -42,12 +42,10 @@ npm start            # http://localhost:3000
 
 Then sign in with one of the demo accounts:
 
-| Role               | Email                 | Password   |
-|--------------------|-----------------------|------------|
-| Fleet Manager      | admin@vaelos.com      | admin123   |
-| Driver             | alex@vaelos.com       | driver123  |
-| Safety Officer     | sarah@vaelos.com      | safety123  |
-| Financial Analyst  | felix@vaelos.com      | finance123 |
+| Role          | Email              | Password  |
+|---------------|--------------------|-----------|
+| Fleet Manager | admin@vaelos.com   | admin123  |
+| Driver        | alex@vaelos.com    | driver123 |
 
 ---
 

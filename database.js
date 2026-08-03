@@ -66,7 +66,7 @@ function init() {
       name TEXT NOT NULL,
       email TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
-      role TEXT NOT NULL CHECK (role IN ('Fleet Manager','Driver','Safety Officer','Financial Analyst')),
+      role TEXT NOT NULL CHECK (role IN ('Fleet Manager','Driver')),
       created_at TEXT NOT NULL
     );
 
@@ -215,14 +215,10 @@ function init() {
 const DEMO_EMAILS = new Set([
   'admin@vaelos.com',
   'alex@vaelos.com',
-  'sarah@vaelos.com',
-  'felix@vaelos.com',
 ]);
 const DEMO_SCOPE = {
   'admin@vaelos.com':   'admin',
   'alex@vaelos.com':    'driver',
-  'sarah@vaelos.com':   'safety',
-  'felix@vaelos.com':   'finance',
 };
 function isDemoEmail(email) {
   return email && DEMO_EMAILS.has(String(email).toLowerCase());
@@ -318,8 +314,6 @@ function seed() {
   const users = [
     ['Admin Vaelos', 'admin@vaelos.com', 'admin123', 'Fleet Manager'],
     ['Alex Driver',  'alex@vaelos.com',  'driver123', 'Driver'],
-    ['Sarah Safety', 'sarah@vaelos.com', 'safety123', 'Safety Officer'],
-    ['Felix Finance','felix@vaelos.com', 'finance123', 'Financial Analyst'],
   ];
   const insUser = db.prepare(
     'INSERT INTO users (name,email,password_hash,role,created_at) VALUES (?,?,?,?,?)'

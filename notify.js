@@ -21,7 +21,7 @@ if (RESEND_KEY) {
 }
 
 const DEMO_EMAILS = new Set([
-  'admin@vaelos.com', 'alex@vaelos.com', 'sarah@vaelos.com', 'felix@vaelos.com',
+  'admin@vaelos.com', 'alex@vaelos.com',
 ]);
 function isDemoEmail(email) {
   return email && DEMO_EMAILS.has(String(email).toLowerCase());

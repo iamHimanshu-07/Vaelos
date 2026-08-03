@@ -342,8 +342,8 @@ const NAV_ITEMS = [
   { id: 'fuel',          label: '⛽ Fuel & Expenses',    roles: ['*'],                       group: 'Finance' },
   { id: 'reports',       label: '📈 Reports',            roles: ['*'],                       group: 'Finance' },
   { id: 'leaderboard',   label: '🏆 Leaderboard',        roles: ['*'],                       group: 'People' },
-  { id: 'predictive',    label: '🔮 Predictive AI',      roles: ['Fleet Manager','Safety Officer'], group: 'Insights' },
-  { id: 'audit',         label: '📋 Audit Log',          roles: ['Fleet Manager','Safety Officer'], group: 'Admin' },
+  { id: 'predictive',    label: '🔮 Predictive AI',      roles: ['Fleet Manager'],             group: 'Insights' },
+  { id: 'audit',         label: '📋 Audit Log',          roles: ['Fleet Manager'],             group: 'Admin' },
   { id: 'users',         label: '👥 Users',              roles: ['Fleet Manager'],           group: 'Admin' },
   { id: 'ai',            label: '🤖 AI Assistant',       roles: ['*'],                       hideInNav: true },
 ];
@@ -1636,7 +1636,16 @@ async function renderAudit(c) {
   const isOwner = state.user && state.user.email === 'itshimanshu666@gmail.com';
   const wantAll = state._auditScope === 'all' && isOwner;
   const url = '/api/audit?limit=200' + (wantAll ? '&scope=all' : '');
-  const logs = await api(url);
+  // Defensive: server always returns an array, but guard against stale
+  // service-worker bundles or transient parse failures returning {}.
+  let logs = [];
+  try {
+    const data = await api(url);
+    logs = Array.isArray(data) ? data : [];
+  } catch (e) {
+    c.innerHTML = `<div class="card"><p class="text-soft">Couldn't load audit log: ${escapeHtml(e.message || 'unknown error')}</p></div>`;
+    return;
+  }
   c.innerHTML = `
     <div class="card">
       <div class="flex-between mb-1">
@@ -1836,7 +1845,6 @@ async function renderUsers(c) {
       <div class="form-row"><label>Role*</label>
         <select id="f-role">
           <option>Fleet Manager</option><option>Driver</option>
-          <option>Safety Officer</option><option>Financial Analyst</option>
         </select></div>
       <button class="btn btn-primary" id="save-u">Create User</button>
     </div>
@@ -2112,7 +2120,7 @@ function handleVoiceCommand(t) {
       if (page) {
         e.preventDefault();
         navigate(page);
-        if (state.user && state.user.role !== 'Fleet Manager' && state.user.role !== 'Safety Officer' &&
+        if (state.user && state.user.role !== 'Fleet Manager' &&
             (page === 'audit' || page === 'predictive' || page === 'users')) {
           // role-gated pages will be guarded inside the renderer too
         }
