@@ -297,6 +297,17 @@ app.post('/api/ai', authRequired, (req, res) => {
   res.json(ops.aiAsk(question));
 });
 
+// Build info — version + uptime so healthchecks and the login screen can
+// show the running release name without round-tripping to package.json.
+const APP_VERSION = require('./package.json').version;
+const RELEASE_NAME = require('./package.json').releaseName || `Vaelos v${APP_VERSION}`;
+app.get('/api/build', (_req, res) => res.json({
+  version: APP_VERSION,
+  name: RELEASE_NAME,
+  node: process.version,
+  started: new Date(Date.now() - Math.floor(process.uptime() * 1000)).toISOString(),
+}));
+
 // ----------------------------- Static frontend ----------------------------- //
 // Liveness probe — registered BEFORE static middleware so Railway's
 // healthcheck always gets a 200 even if index.html is mid-rebuild.

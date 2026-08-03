@@ -201,8 +201,53 @@ function init() {
   ]) {
     try { db.exec(stmt); } catch (_) { /* column already exists */ }
   }
-  // Role rename: Fleet Manager → Admin (one-time data migration).
-  try { db.exec("UPDATE users SET role='Admin' WHERE role='Fleet Manager'"); } catch (_) {}
+  // Role rename: Fleet Manager → Admin — both data and CHECK constraint.
+  // SQLite can't ALTER a CHECK constraint, so the table is rebuilt in place
+  // when an old version with the wider enum is detected.
+  try {
+    const sql = db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'"
+    ).get();
+    if (sql && /Fleet Manager/.test(sql.sql || '')) {
+      console.log('[vaelos] migrating users table CHECK constraint → Admin');
+      db.pragma('foreign_keys = OFF');
+      db.exec('BEGIN');
+      try {
+        db.exec(`CREATE TABLE users_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          email TEXT UNIQUE NOT NULL,
+          password_hash TEXT NOT NULL,
+          role TEXT NOT NULL CHECK (role IN ('Admin','Driver')),
+          driver_id INTEGER,
+          created_at TEXT NOT NULL
+        )`);
+        db.exec(`INSERT INTO users_new (id, name, email, password_hash, role, driver_id, created_at)
+                 SELECT id, name, email, password_hash,
+                        CASE role WHEN 'Fleet Manager' THEN 'Admin'
+                                  WHEN 'Safety Officer' THEN 'Driver'
+                                  WHEN 'Financial Analyst' THEN 'Driver'
+                                  ELSE role END AS role,
+                        driver_id, created_at
+                 FROM users`);
+        db.exec('DROP TABLE users');
+        db.exec('ALTER TABLE users_new RENAME TO users');
+        db.exec('COMMIT');
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      } finally {
+        db.pragma('foreign_keys = ON');
+      }
+    } else {
+      // Schema already current — just normalise role values for any
+      // stragglers from the old multi-role era.
+      db.exec("UPDATE users SET role='Admin' WHERE role='Fleet Manager'");
+      db.exec("UPDATE users SET role='Driver' WHERE role IN ('Safety Officer','Financial Analyst')");
+    }
+  } catch (e) {
+    console.error('[vaelos] user-table migration failed:', e && e.message || e);
+  }
 
   const userCount = db.prepare('SELECT COUNT(*) c FROM users').get().c;
   if (userCount === 0) seed();

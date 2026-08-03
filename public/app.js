@@ -5,6 +5,26 @@
 
 const API = '/api';
 const WS_URL = (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws';
+let APP_VERSION = '1.0';
+
+// Stamp the version into every [data-vaelos-version] element on the page.
+// Server /api/build is the source of truth once it's reachable; otherwise
+// the fallback constant is used so the page never reads empty.
+function paintVersion() {
+  document.querySelectorAll('[data-vaelos-version]').forEach(el => {
+    el.textContent = 'v' + APP_VERSION;
+  });
+}
+async function loadBuild() {
+  try {
+    const info = await api('/build');
+    if (info && info.version) {
+      APP_VERSION = info.version;
+      document.title = `Vaelos v${APP_VERSION} — Smart Transport Operations Platform`;
+      paintVersion();
+    }
+  } catch { /* offline / pre-200 — keep fallback constant */ }
+}
 
 // Theme: always start on light theme by default for the whole site.
 // Visitors can still toggle to dark via the top-right icon; their choice
@@ -2201,6 +2221,8 @@ function setupHealthIndicator() {
 
 
 (async function boot() {
+  paintVersion();
+  loadBuild(); // fire-and-forget
   try {
     const { user } = await api('/auth/me');
     state.user = user;
@@ -2208,6 +2230,7 @@ function setupHealthIndicator() {
     connectWS();
     setupHealthIndicator();
   } catch { showLogin(); }
+  paintVersion();
   setupVoice();
 
   // PWA: register service worker (cache busted on each release via sw.js CACHE)
