@@ -9,7 +9,7 @@ const cookieParser = require('cookie-parser');
 const jwt = require('jsonwebtoken');
 const { WebSocketServer } = require('ws');
 
-const { init, verifyUser, recomputeLicenseNotifications } = require('./database');
+const { init, verifyUser, recomputeLicenseNotifications, db } = require('./database');
 const ops = require('./operations');
 
 console.log('[vaelos] booting…');
@@ -66,9 +66,19 @@ function broadcast(action, entity, id, message) {
 }
 
 // ----------------------------- AUTH ----------------------------- //
+const signupRate = new Map(); // email -> count (in-memory, sufficient for demo)
+function rateLimit(key, max = 5, windowMs = 60_000) {
+  const now = Date.now();
+  const arr = (signupRate.get(key) || []).filter(t => now - t < windowMs);
+  arr.push(now);
+  signupRate.set(key, arr);
+  return arr.length <= max;
+}
+
 app.post('/api/auth/login', (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) return res.status(400).json({ error: 'Email & password required' });
+  if (!rateLimit('login:' + email.toLowerCase())) return res.status(429).json({ error: 'Too many attempts. Try again in a minute.' });
   const user = verifyUser(email, password);
   if (!user) return res.status(401).json({ error: 'Invalid email or password' });
   const token = jwt.sign(
@@ -77,6 +87,34 @@ app.post('/api/auth/login', (req, res) => {
   );
   res.cookie('token', token, { httpOnly: true, sameSite: 'lax' });
   res.json({ user, token });
+});
+app.post('/api/auth/signup', (req, res) => {
+  const { name, email, password, role } = req.body || {};
+  if (!name || !email || !password) return res.status(400).json({ error: 'Name, email, and password are required.' });
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Invalid email address.' });
+  if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+  if (!rateLimit('signup:' + email.toLowerCase(), 3, 5 * 60_000)) return res.status(429).json({ error: 'Too many signup attempts. Try again in 5 minutes.' });
+  // First-ever user becomes Fleet Manager; everyone else is Driver by default.
+  const existing = ops.listUsers();
+  const finalRole = (existing.length === 0) ? 'Fleet Manager'
+                  : (['Driver','Safety Officer','Financial Analyst','Fleet Manager'].includes(role) ? role : 'Driver');
+  try {
+    ops.addUser({ user: null }, { name: name.trim(), email: email.trim().toLowerCase(), password, role: finalRole });
+    const created = require('./database').db.prepare(
+      'SELECT id, name, email, role FROM users WHERE email = ?'
+    ).get(email.trim().toLowerCase());
+    res.json({ ok: true, user: created });
+  } catch (e) {
+    const msg = String(e.message || '');
+    if (msg.includes('UNIQUE') && msg.includes('email'))
+      return res.status(409).json({ error: 'An account with that email already exists. Try signing in.' });
+    return res.status(400).json({ error: msg });
+  }
+});
+app.post('/api/auth/forgot', (req, res) => {
+  // Demo-mode: no email infra, so we always 200 and tell the client
+  // to use the demo accounts or ask a Fleet Manager to reset.
+  return res.json({ ok: true, message: 'If an account exists for that email, a reset link will be sent. (Demo mode: contact your Fleet Manager.)' });
 });
 app.post('/api/auth/logout', (req, res) => {
   res.clearCookie('token'); res.json({ ok: true });
@@ -235,6 +273,17 @@ app.get('/health', (_req, res) => {
 });
 app.get('/healthz', (_req, res) => {
   res.status(200).end();
+});
+// Public counters used by the login screen (no auth, no PII).
+app.get('/api/health-stats', (_req, res) => {
+  try {
+    const vehicles = db.prepare('SELECT COUNT(*) c FROM vehicles').get().c;
+    const trips    = db.prepare('SELECT COUNT(*) c FROM trips').get().c;
+    const drivers  = db.prepare('SELECT COUNT(*) c FROM drivers').get().c;
+    res.json({ vehicles, trips, drivers });
+  } catch (e) {
+    res.json({ vehicles: 0, trips: 0, drivers: 0 });
+  }
 });
 
 app.use(express.static(path.join(__dirname, 'public')));

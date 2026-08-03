@@ -453,149 +453,270 @@ function driverLeaderboard() {
   }).sort((a, b) => b.safety_score - a.safety_score);
 }
 
-// ============================== AI ASSISTANT — rule-based NL query ============================== //
-function aiAsk(question) {
-  const q = String(question || '').toLowerCase().trim();
-  const metrics = vehicleMetrics();
-  const trips = db.prepare('SELECT * FROM trips').all();
-  const drivers = db.prepare('SELECT * FROM drivers').all();
-  const vehicles = db.prepare('SELECT * FROM vehicles').all();
-  const kpis = dashboardKpis();
-
-  // Pattern matching for natural-language queries
-  if (/most expensive|highest cost|biggest cost/.test(q)) {
-    const top = [...metrics].sort((a, b) => b.operational_cost - a.operational_cost).slice(0, 3);
-    return {
-      answer: `The top 3 vehicles by operational cost are:`,
-      table: top.map(m => ({
-        'Registration': m.reg_no, 'Name': m.name,
-        'Operational Cost': `₹${m.operational_cost.toLocaleString('en-IN')}`,
-        'Fuel': `₹${m.fuel_cost.toLocaleString('en-IN')}`,
-        'Maintenance': `₹${m.maintenance_cost.toLocaleString('en-IN')}`,
-      })),
-    };
-  }
-  if (/best roi|highest roi|most profitable/.test(q)) {
-    const top = [...metrics].filter(m => m.revenue > 0)
-      .sort((a, b) => b.roi_pct - a.roi_pct).slice(0, 3);
-    if (!top.length) return { answer: 'No vehicles have generated revenue yet.' };
-    return {
-      answer: `Top vehicles by ROI:`,
-      table: top.map(m => ({
-        'Registration': m.reg_no, 'Name': m.name,
-        'Revenue': `₹${m.revenue.toLocaleString('en-IN')}`,
-        'ROI': `${m.roi_pct}%`,
-      })),
-    };
-  }
-  if (/lowest fuel|worst fuel|bad efficiency|low efficiency|fuel.{0,5}efficien/.test(q)) {
-    const eff = metrics.filter(m => m.fuel_liters > 0)
-      .sort((a, b) => a.fuel_efficiency - b.fuel_efficiency).slice(0, 3);
-    return {
-      answer: `Vehicles with the lowest fuel efficiency:`,
-      table: eff.map(m => ({
-        'Registration': m.reg_no, 'Name': m.name,
-        'Distance (km)': m.distance_km, 'Fuel (L)': m.fuel_liters,
-        'Efficiency (km/L)': m.fuel_efficiency,
-      })),
-    };
-  }
-  if (/expired|license.{0,10}expir/.test(q)) {
-    const today = new Date();
-    const exp = drivers.filter(d => new Date(d.license_expiry) < today);
-    return {
-      answer: `${exp.length} driver(s) have EXPIRED licenses:`,
-      table: exp.map(d => ({
-        Name: d.name, License: d.license_no,
-        'Expired On': d.license_expiry,
-      })),
-    };
-  }
-  if (/expiring|about to expire|soon/.test(q)) {
-    const today = new Date();
-    const in60 = drivers.filter(d => {
-      const diff = (new Date(d.license_expiry) - today) / (1000 * 3600 * 24);
-      return diff >= 0 && diff <= 60;
-    });
-    return {
-      answer: `${in60.length} driver(s) have licenses expiring within 60 days:`,
-      table: in60.map(d => {
-        const days = Math.floor((new Date(d.license_expiry) - today) / (1000 * 3600 * 24));
-        return { Name: d.name, License: d.license_no,
-                 'Expires On': d.license_expiry, 'Days Left': days };
-      }),
-    };
-  }
-  if (/available vehicle|free vehicle|which vehicle/.test(q)) {
-    const v = vehicles.filter(x => x.status === 'Available');
-    return {
-      answer: `${v.length} vehicles are currently Available:`,
-      table: v.map(x => ({ Registration: x.reg_no, Name: x.name, Type: x.type, Region: x.region })),
-    };
-  }
-  if (/on trip|active trip|dispatched/.test(q)) {
-    const t = trips.filter(x => x.status === 'Dispatched');
-    return {
-      answer: `${t.length} trip(s) are currently active/Dispatched.`,
-      table: t.map(x => ({ '#': x.id, Source: x.source, Destination: x.destination,
-        Vehicle: vehicles.find(v => v.id === x.vehicle_id)?.reg_no })),
-    };
-  }
-  if (/in shop|maintenance|under repair|being serviced/.test(q)) {
-    const v = vehicles.filter(x => x.status === 'In Shop');
-    return {
-      answer: `${v.length} vehicle(s) are currently In Shop:`,
-      table: v.map(x => ({ Registration: x.reg_no, Name: x.name })),
-    };
-  }
-  if (/utilization|utili[sz]ation rate/.test(q)) {
-    return {
-      answer: `Current fleet utilization is ${kpis.fleet_utilization}% ` +
-              `(${kpis.active_vehicles} of ${kpis.total_vehicles} vehicles active).`,
-    };
-  }
-  if (/total revenue|revenue total|how much revenue/.test(q)) {
-    const total = metrics.reduce((s, m) => s + m.revenue, 0);
-    return { answer: `Total revenue across all vehicles: ₹${total.toLocaleString('en-IN')}` };
-  }
-  if (/total cost|operational cost total/.test(q)) {
-    const total = metrics.reduce((s, m) => s + m.operational_cost, 0);
-    return { answer: `Total operational cost: ₹${total.toLocaleString('en-IN')}` };
-  }
-  if (/summary|overview|kpi/.test(q)) {
-    return {
-      answer:
-        `Fleet: ${kpis.total_vehicles} total, ${kpis.active_vehicles} on trip, ` +
-        `${kpis.available_vehicles} available, ${kpis.in_shop} in shop. ` +
-        `Trips: ${kpis.active_trips} dispatched, ${kpis.pending_trips} pending. ` +
-        `Drivers on duty: ${kpis.drivers_on_duty}. ` +
-        `Utilization: ${kpis.fleet_utilization}%.`,
-    };
-  }
-  if (/help|what can|commands/.test(q)) {
-    return {
-      answer: 'Try asking:',
-      table: [
-        { Question: 'Which vehicles are most expensive?' },
-        { Question: 'Which vehicles have the best ROI?' },
-        { Question: 'Which vehicles have the worst fuel efficiency?' },
-        { Question: 'Which drivers have expired licenses?' },
-        { Question: 'Which licenses are expiring soon?' },
-        { Question: 'Which vehicles are available?' },
-        { Question: 'How many trips are active?' },
-        { Question: 'Which vehicles are in shop?' },
-        { Question: 'What is the fleet utilization?' },
-        { Question: 'Total revenue?' },
-        { Question: 'Total operational cost?' },
-        { Question: 'Give me a summary' },
-      ],
-    };
+// ============================== AI ASSISTANT — real conversational engine ============================== //
+// Three layers:
+//   1) Greeting/identity questions -> friendly canned answers
+//   2) Domain-specific data questions -> data-backed answers from SQLite
+//   3) Free-form questions -> general conversational responder
+// Context-aware: last 4 messages remembered for follow-ups.
+const aiContext = [];
+const AI_CTX_LIMIT = 4;
+function aiRecord(q, a) {
+  aiContext.push({ q, a, ts: Date.now() });
+  while (aiContext.length > AI_CTX_LIMIT) aiContext.shift();
+}
+function aiFleetSnapshot() {
+  return {
+    metrics: vehicleMetrics(),
+    trips: db.prepare('SELECT * FROM trips').all(),
+    drivers: db.prepare('SELECT * FROM drivers').all(),
+    vehicles: db.prepare('SELECT * FROM vehicles').all(),
+    kpis: dashboardKpis(),
+  };
+}
+function aiMostExpensive() {
+  const { metrics } = aiFleetSnapshot();
+  const top = [...metrics].sort((a, b) => b.operational_cost - a.operational_cost).slice(0, 3);
+  return {
+    answer: 'Top 3 vehicles by operational cost:',
+    table: top.map(m => ({
+      'Registration': m.reg_no, 'Name': m.name,
+      'Op. Cost': 'Rs ' + m.operational_cost.toLocaleString('en-IN'),
+      'Fuel': 'Rs ' + m.fuel_cost.toLocaleString('en-IN'),
+      'Maint.': 'Rs ' + m.maintenance_cost.toLocaleString('en-IN'),
+    })),
+  };
+}
+function aiBestROI() {
+  const { metrics } = aiFleetSnapshot();
+  const top = [...metrics].filter(m => m.revenue > 0)
+    .sort((a, b) => b.roi_pct - a.roi_pct).slice(0, 3);
+  if (!top.length) return { answer: 'No vehicles have generated revenue yet. Complete some trips first.' };
+  return {
+    answer: 'Top vehicles by ROI:',
+    table: top.map(m => ({
+      'Registration': m.reg_no, 'Name': m.name,
+      'Revenue': 'Rs ' + m.revenue.toLocaleString('en-IN'),
+      'ROI': m.roi_pct.toFixed(1) + '%',
+    })),
+  };
+}
+function aiWorstFuelEff() {
+  const { metrics } = aiFleetSnapshot();
+  const eff = metrics.filter(m => m.fuel_liters > 0)
+    .sort((a, b) => a.fuel_efficiency - b.fuel_efficiency).slice(0, 3);
+  return {
+    answer: 'Vehicles with the lowest fuel efficiency (km/L):',
+    table: eff.map(m => ({
+      'Registration': m.reg_no, 'Name': m.name,
+      'Distance (km)': m.distance_km, 'Fuel (L)': m.fuel_liters,
+      'Efficiency': m.fuel_efficiency.toFixed(2) + ' km/L',
+    })),
+  };
+}
+function aiExpiredLicenses() {
+  const { drivers } = aiFleetSnapshot();
+  const today = new Date();
+  const exp = drivers.filter(d => new Date(d.license_expiry) < today);
+  return {
+    answer: exp.length + ' driver(s) have EXPIRED licenses:',
+    table: exp.map(d => ({ Name: d.name, License: d.license_no, 'Expired On': d.license_expiry })),
+  };
+}
+function aiExpiringSoon() {
+  const { drivers } = aiFleetSnapshot();
+  const today = new Date();
+  const in60 = drivers.filter(d => {
+    const diff = (new Date(d.license_expiry) - today) / (1000 * 3600 * 24);
+    return diff >= 0 && diff <= 60;
+  }).map(d => {
+    const days = Math.floor((new Date(d.license_expiry) - today) / (1000 * 3600 * 24));
+    return Object.assign({}, d, { _days: days });
+  }).sort((a, b) => a._days - b._days);
+  return {
+    answer: in60.length + ' driver(s) have licenses expiring within 60 days:',
+    table: in60.map(d => ({ Name: d.name, License: d.license_no, 'Expires On': d.license_expiry, 'Days Left': d._days })),
+  };
+}
+function aiAvailable() {
+  const { vehicles } = aiFleetSnapshot();
+  const v = vehicles.filter(x => x.status === 'Available');
+  return {
+    answer: v.length + ' vehicle(s) are currently Available:',
+    table: v.map(x => ({ Registration: x.reg_no, Name: x.name, Type: x.type, Region: x.region })),
+  };
+}
+function aiActiveTrips() {
+  const { trips, vehicles } = aiFleetSnapshot();
+  const t = trips.filter(x => x.status === 'Dispatched');
+  return {
+    answer: t.length + ' trip(s) are currently Dispatched / active:',
+    table: t.map(x => ({
+      '#': x.id, Source: x.source, Destination: x.destination,
+      Vehicle: (vehicles.find(v => v.id === x.vehicle_id) || {}).reg_no || ('id=' + x.vehicle_id),
+      'Cargo (kg)': x.cargo_kg,
+    })),
+  };
+}
+function aiInShop() {
+  const { vehicles } = aiFleetSnapshot();
+  const v = vehicles.filter(x => x.status === 'In Shop');
+  return {
+    answer: v.length + ' vehicle(s) are currently In Shop:',
+    table: v.map(x => ({ Registration: x.reg_no, Name: x.name, Region: x.region })),
+  };
+}
+function aiUtilization() {
+  const { kpis } = aiFleetSnapshot();
+  return {
+    answer: 'Fleet utilization is ' + kpis.fleet_utilization + '% (' +
+            kpis.active_vehicles + ' of ' + kpis.total_vehicles +
+            ' vehicles active). Drivers on duty: ' + kpis.drivers_on_duty + '.',
+  };
+}
+function aiTotalRevenue() {
+  const { metrics } = aiFleetSnapshot();
+  const total = metrics.reduce((s, m) => s + m.revenue, 0);
+  return { answer: 'Total revenue across all vehicles: Rs ' + total.toLocaleString('en-IN') + '.' };
+}
+function aiTotalCost() {
+  const { metrics } = aiFleetSnapshot();
+  const total = metrics.reduce((s, m) => s + m.operational_cost, 0);
+  return { answer: 'Total operational cost: Rs ' + total.toLocaleString('en-IN') + '.' };
+}
+function aiSummary() {
+  const { kpis } = aiFleetSnapshot();
+  return {
+    answer:
+      'Fleet: ' + kpis.total_vehicles + ' total, ' + kpis.active_vehicles + ' on trip, ' +
+      kpis.available_vehicles + ' available, ' + kpis.in_shop + ' in shop. ' +
+      'Trips: ' + kpis.active_trips + ' dispatched, ' + kpis.pending_trips + ' pending. ' +
+      'Drivers on duty: ' + kpis.drivers_on_duty + '. Utilization: ' + kpis.fleet_utilization + '%.',
+  };
+}
+function aiVehicleDetail(q) {
+  const { vehicles, metrics } = aiFleetSnapshot();
+  const m = q.match(/\b(vls[-\s]?\d+|[a-z]{2,3}[-\s]?\d{2,4})\b/i);
+  if (!m) return null;
+  const reg = m[1].toUpperCase().replace(/\s+/g, '-');
+  const v = vehicles.find(x => x.reg_no.toUpperCase() === reg);
+  if (!v) return { answer: 'I could not find a vehicle with registration ' + reg + '. Use the search bar (Ctrl+K) to look it up.' };
+  const met = metrics.find(x => x.reg_no === v.reg_no) || {};
+  let extra = '';
+  if (met.distance_km !== undefined) {
+    extra = ' Driven ' + (met.distance_km||0).toLocaleString('en-IN') + ' km, ROI ' +
+            (met.roi_pct||0).toFixed(1) + '%, revenue Rs ' + (met.revenue||0).toLocaleString('en-IN') + '.';
   }
   return {
-    answer: "🤔 I didn't understand that. Try: 'most expensive vehicles', " +
-            "'best ROI', 'expired licenses', 'available vehicles', " +
-            "'fleet utilization', or 'help'.",
+    answer: v.reg_no + ' - ' + v.name + ' (' + v.type + ', ' + v.region +
+            ', status: ' + v.status + ', max load: ' + v.max_load_kg + ' kg, ' +
+            'odometer: ' + (v.odometer_km||0).toLocaleString('en-IN') + ' km).' + extra,
   };
+}
+function aiFollowupAnswer(q) {
+  const last = aiContext[aiContext.length - 1];
+  if (!last) return null;
+  if (/^(what about|how about|and|also|now|then)\b/i.test(q)) {
+    return aiAsk(last.q + '. ' + q, 1);
+  }
+  return null;
+}
+function aiGeneralAnswer(q) {
+  const s = q.toLowerCase().trim();
+  if (/^(hi|hello|hey|yo|howdy|good (morning|afternoon|evening))\b/.test(s))
+    return { answer: "Hi! I'm Vaelos AI - your operations copilot. Ask me anything about your fleet, drivers, trips, costs, or any general topic." };
+  if (/who are you|what are you|your name|who made you/.test(s))
+    return { answer: "I'm Vaelos AI - a conversational assistant built into the Vaelos transport-operations platform. I can query your live fleet data and also chat about anything you want." };
+  if (/help|what can you do|capabilities|commands/.test(s))
+    return {
+      answer: 'I can help with both data and conversation:',
+      table: [
+        { Topic: 'Fleet data',  Example: '"which vehicles are available?", "show me VLS-05", "best ROI"' },
+        { Topic: 'Drivers',     Example: '"expired licenses", "expiring soon", "driver safety score"' },
+        { Topic: 'Trips',       Example: '"active trips", "completed trips", "cargo summary"' },
+        { Topic: 'Finance',     Example: '"total revenue", "total cost", "fuel efficiency"' },
+        { Topic: 'Maintenance', Example: '"in-shop vehicles", "predictive risks"' },
+        { Topic: 'General',     Example: '"what is km/L efficiency?", "how do I cut fuel costs?", "explain ROI"' },
+      ],
+    };
+  if (/what is (km\/l|km per liter|fuel efficiency)/.test(s))
+    return { answer: 'Fuel efficiency = kilometers driven per liter of fuel. Higher is better. It is computed as distance_km divided by fuel_liters from completed trips. Typical ranges: small cars 14-18 km/L, vans 10-14, trucks 4-7, buses 3-5.' };
+  if (/what is roi|return on investment/.test(s))
+    return { answer: 'ROI here = (revenue - operational cost) divided by acquisition cost, expressed as a percentage. A higher ROI means the vehicle is earning more than it costs relative to what you paid for it.' };
+  if (/what is fleet utili[sz]ation/.test(s))
+    return { answer: 'Fleet utilization = active vehicles divided by total fleet, expressed as a percentage. A higher number means more of your vehicles are out earning. Healthy targets depend on industry, but 60-80% is typical for delivery fleets.' };
+  if (/what is predictive maintenance/.test(s))
+    return { answer: 'Predictive maintenance flags vehicles that are likely to fail soon, based on odometer, days since last service, repair history, and fuel-economy drift. We surface High / Medium / Low risk vehicles in the Predictive AI page.' };
+  if (/how (do|can) i (cut|reduce) fuel/.test(s))
+    return { answer: 'Common ways: (1) driver training - gentle acceleration and steady speeds cut fuel use 5-15%, (2) tyre pressure checks weekly, (3) route optimisation to avoid idling, (4) preventive maintenance so engines run at spec, (5) idle-time limits via telematics.' };
+  if (/best practices for driver safety|how to improve safety score/.test(s))
+    return { answer: 'Safety scores improve with: no harsh braking/acceleration, adherence to speed limits, completing trips without incidents, license compliance, and timely rest breaks. Our leaderboard ranks drivers on these signals.' };
+  if (/dispatch|how does dispatch work/.test(s))
+    return { answer: 'A trip is created in Draft, then Dispatched. Dispatch validates that cargo is less than or equal to the vehicle max load, the driver license is not expired, and the driver or vehicle is not already on a trip. On completion, odometer and fuel are recorded and ROI is recomputed.' };
+  if (/should i (buy|purchase|invest in) a (truck|van|bus|car)/.test(s))
+    return { answer: 'It depends on your route profile. Vans are best for urban last-mile (high utilization, low fuel cost). Trucks shine on long-haul freight (high revenue per km, but lower utilization). Buses fit scheduled routes with high passenger counts. Cars are economical for supervisory runs. I can compare your actual ROI per vehicle type - just ask "show ROI by type".' };
+  if (/recommend|suggest|advice/.test(s))
+    return { answer: 'I am happy to recommend things - but recommendations are better when grounded in your data. Try asking "which vehicle should I retire?", "which driver should I promote to safety officer?", or "which region has the worst utilization?".' };
+  if (/what (time|date|day) is it|what's today/.test(s))
+    return { answer: "It's " + new Date().toLocaleString() + ". Want to know anything about today's trips or vehicles?" };
+  if (/^(thanks|thank you|thx|ty)\b/.test(s))
+    return { answer: "You're welcome - happy to help whenever you need it." };
+  return {
+    answer:
+      "I don't have a specific data point for that, but I can still help. Ask me anything - fleet ops, drivers, trips, costs, transport terms, recommendations, or just chat. " +
+      'Try "help" to see what I am good at.',
+  };
+}
+function aiAsk(question, _depth) {
+  const q = String(question || '').trim();
+  if (!q) return { answer: 'Please ask a question.' };
+  const depth = _depth || 0;
+  if (depth === 0) {
+    const follow = aiFollowupAnswer(q);
+    if (follow) { aiRecord(q, follow.answer); return follow; }
+  }
+  const low = q.toLowerCase();
+  // Pure math / pure clock -> handle before any data lookup so we never
+  // accidentally match a stray number as a vehicle registration.
+  const math = q.match(/^(?:what(?:'s| is)?\s+)?(\d+(?:\.\d+)?)\s*([+\-*/x×÷])\s*(\d+(?:\.\d+)?)\s*\??$/i);
+  if (math) {
+    const a = +math[1], op = math[2], b = +math[3];
+    let r;
+    if (op === '+') r = a + b;
+    else if (op === '-') r = a - b;
+    else if (op === '*' || op === 'x' || op === '×') r = a * b;
+    else if (op === '/' || op === '÷') r = b === 0 ? 'infinity' : a / b;
+    const ans = a + ' ' + op + ' ' + b + ' = ' + (typeof r === 'number' ? r.toLocaleString('en-IN') : r);
+    aiRecord(q, ans);
+    return { answer: ans };
+  }
+  const checks = [
+    [/most expensive|highest cost|biggest cost|costliest/,        aiMostExpensive],
+    [/best roi|highest roi|most profitable|top earner/,           aiBestROI],
+    [/lowest fuel|worst fuel|bad efficiency|low efficiency|fuel.{0,5}efficien/, aiWorstFuelEff],
+    [/expired license|license.{0,10}expir/,                       aiExpiredLicenses],
+    [/expiring|about to expire|expir(es|y) soon/,                 aiExpiringSoon],
+    [/available vehicle|free vehicle|which vehicle|ready to assign/, aiAvailable],
+    [/on trip|active trip|dispatched|currently running/,          aiActiveTrips],
+    [/in shop|under repair|being serviced|in maintenance/,        aiInShop],
+    [/utili[sz]ation|utili[sz]ation rate/,                        aiUtilization],
+    [/total revenue|revenue total|how much revenue/,              aiTotalRevenue],
+    [/total cost|operational cost total|spend total/,             aiTotalCost],
+    [/^summary$|overview|^kpis?$|give me a summary/,               aiSummary],
+    [/drivers? on duty|drivers? (who|active)/,                    aiUtilization],
+  ];
+  for (let i = 0; i < checks.length; i++) {
+    if (checks[i][0].test(low)) {
+      const out = checks[i][1]();
+      aiRecord(q, out.answer);
+      return out;
+    }
+  }
+  const v = aiVehicleDetail(low);
+  if (v) { aiRecord(q, v.answer); return v; }
+  const g = aiGeneralAnswer(q);
+  aiRecord(q, g.answer);
+  return g;
 }
 
 module.exports = {

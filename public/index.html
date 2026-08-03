@@ -12,30 +12,106 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <!-- Login screen -->
+  <!-- Auth screen (sign in / sign up / forgot) -->
   <div id="login-screen" class="login-screen">
-    <div class="login-card">
-      <div class="brand">⚡ Vaelos</div>
-      <p class="subtle">Smart Transport Operations Platform — fleet, drivers, dispatch, maintenance, AI insights, and live updates in one place.</p>
-      <form id="login-form" autocomplete="off">
-        <label>Email
-          <input type="email" id="email" required placeholder="admin@vaelos.com" />
-        </label>
-        <label>Password
-          <input type="password" id="password" required placeholder="admin123" />
-        </label>
-        <button type="submit" class="btn btn-primary btn-block">Sign in</button>
-        <div id="login-error" class="error"></div>
-      </form>
-      <details class="demo">
-        <summary>Demo accounts (click to autofill)</summary>
-        <ul>
-          <li><b>Fleet Manager</b> · admin@vaelos.com / admin123</li>
-          <li><b>Driver</b> · alex@vaelos.com / driver123</li>
-          <li><b>Safety Officer</b> · sarah@vaelos.com / safety123</li>
-          <li><b>Financial Analyst</b> · felix@vaelos.com / finance123</li>
-        </ul>
-      </details>
+    <div class="auth-shell">
+      <!-- Left visual panel (brand + rotating stat tiles) -->
+      <aside class="auth-side">
+        <div class="auth-side-inner">
+          <div class="brand big">⚡ Vaelos</div>
+          <p class="auth-tagline">Smart Transport Operations Platform</p>
+          <ul class="auth-features">
+            <li><span class="auth-ico">🚐</span><div><b>Live Fleet Tracking</b><br><span class="auth-sub">Real-time map, load bars, route polylines</span></div></li>
+            <li><span class="auth-ico">🛠️</span><div><b>Predictive Maintenance AI</b><br><span class="auth-sub">Risk-scored repairs before they happen</span></div></li>
+            <li><span class="auth-ico">📈</span><div><b>Operations Reports</b><br><span class="auth-sub">Fuel efficiency, ROI, exports</span></div></li>
+            <li><span class="auth-ico">🔔</span><div><b>Live Alerts</b><br><span class="auth-sub">License expiry, dispatch events</span></div></li>
+            <li><span class="auth-ico">🔎</span><div><b>Master Search</b><br><span class="auth-sub">Press <kbd>Ctrl K</kbd> anywhere</span></div></li>
+          </ul>
+          <div class="auth-stats">
+            <div class="auth-stat"><span id="auth-stat-v">—</span><b>vehicles</b></div>
+            <div class="auth-stat"><span id="auth-stat-t">—</span><b>trips</b></div>
+            <div class="auth-stat"><span id="auth-stat-d">—</span><b>drivers</b></div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Right form panel -->
+      <section class="auth-pane">
+        <div class="auth-card">
+          <!-- SIGN IN view -->
+          <div id="view-signin" class="auth-view">
+            <h2>Welcome back</h2>
+            <p class="auth-sub-h">Sign in to your Vaelos workspace.</p>
+            <form id="login-form" autocomplete="off">
+              <label>Email <input type="email" id="email" required placeholder="you@company.com" autocomplete="email" /></label>
+              <label>Password
+                <div class="pw-row">
+                  <input type="password" id="password" required placeholder="Your password" autocomplete="current-password" />
+                  <button type="button" class="pw-toggle" data-target="password" aria-label="Show password">👁️</button>
+                </div>
+              </label>
+              <div class="auth-row">
+                <label class="auth-check"><input type="checkbox" id="remember" /> Remember me on this device</label>
+                <a class="auth-link" id="forgot-link" href="#">Forgot password?</a>
+              </div>
+              <button type="submit" class="btn btn-primary btn-block">Sign in</button>
+              <div id="login-error" class="error"></div>
+            </form>
+            <div class="auth-switch">No account? <a class="auth-link" id="goto-signup" href="#">Create one →</a></div>
+            <details class="demo">
+              <summary>Demo accounts (click to autofill)</summary>
+              <ul id="demo-list">
+                <li><button type="button" data-fill='{"email":"admin@vaelos.com","password":"admin123"}'><b>Fleet Manager</b><br>admin@vaelos.com / admin123</button></li>
+                <li><button type="button" data-fill='{"email":"alex@vaelos.com","password":"driver123"}'><b>Driver</b><br>alex@vaelos.com / driver123</button></li>
+                <li><button type="button" data-fill='{"email":"sarah@vaelos.com","password":"safety123"}'><b>Safety Officer</b><br>sarah@vaelos.com / safety123</button></li>
+                <li><button type="button" data-fill='{"email":"felix@vaelos.com","password":"finance123"}'><b>Financial Analyst</b><br>felix@vaelos.com / finance123</button></li>
+              </ul>
+            </details>
+          </div>
+
+          <!-- SIGN UP view -->
+          <div id="view-signup" class="auth-view hidden">
+            <h2>Create your account</h2>
+            <p class="auth-sub-h">Get started with Vaelos in under a minute.</p>
+            <form id="signup-form" autocomplete="off">
+              <label>Full name <input type="text" id="su-name" required placeholder="Jane Driver" autocomplete="name" /></label>
+              <label>Email <input type="email" id="su-email" required placeholder="you@company.com" autocomplete="email" /></label>
+              <label>Password
+                <div class="pw-row">
+                  <input type="password" id="su-password" required minlength="6" placeholder="At least 6 characters" autocomplete="new-password" />
+                  <button type="button" class="pw-toggle" data-target="su-password" aria-label="Show password">👁️</button>
+                </div>
+                <div class="pw-strength" id="pw-strength"><span></span><span></span><span></span><span></span></div>
+                <div class="pw-strength-text text-soft" id="pw-strength-text"></div>
+              </label>
+              <label>Role
+                <select id="su-role">
+                  <option value="Driver">Driver</option>
+                  <option value="Safety Officer">Safety Officer</option>
+                  <option value="Financial Analyst">Financial Analyst</option>
+                  <option value="Fleet Manager">Fleet Manager</option>
+                </select>
+              </label>
+              <button type="submit" class="btn btn-primary btn-block">Create account</button>
+              <div id="signup-error" class="error"></div>
+            </form>
+            <div class="auth-switch">Already have an account? <a class="auth-link" id="goto-signin" href="#">Sign in →</a></div>
+          </div>
+
+          <!-- FORGOT view -->
+          <div id="view-forgot" class="auth-view hidden">
+            <h2>Forgot password</h2>
+            <p class="auth-sub-h">Enter your email and we'll send you a reset link.</p>
+            <form id="forgot-form" autocomplete="off">
+              <label>Email <input type="email" id="fp-email" required placeholder="you@company.com" /></label>
+              <button type="submit" class="btn btn-primary btn-block">Send reset link</button>
+              <div id="forgot-error" class="error"></div>
+              <div id="forgot-ok" class="text-soft" style="margin-top:.6rem"></div>
+            </form>
+            <div class="auth-switch"><a class="auth-link" id="back-signin" href="#">← Back to sign in</a></div>
+          </div>
+        </div>
+      </section>
     </div>
   </div>
 
@@ -121,11 +197,20 @@
   <!-- Toast -->
   <div id="toast" class="toast hidden"></div>
 
-  <!-- Voice feedback overlay -->
-  <div id="voice-overlay" class="voice-overlay hidden">
-    <div class="voice-pulse"></div>
-    <div class="voice-text" id="voice-text">Listening...</div>
-    <button class="btn btn-sm" id="voice-stop">Stop</button>
+  <!-- Voice feedback overlay (also hosts the text-command fallback) -->
+  <div id="voice-overlay" class="voice-overlay hidden" data-mode="voice">
+    <div class="voice-card">
+      <div class="voice-pulse"></div>
+      <div class="voice-text" id="voice-text">Listening…</div>
+      <div class="voice-text-input-row">
+        <input id="voice-text-input" type="text" placeholder='Or type a command: "open vehicles", "show trips"…' autocomplete="off" />
+        <button class="btn btn-primary btn-sm" id="voice-text-submit">Run</button>
+      </div>
+      <div class="voice-hint">
+        Try: <b>open vehicles</b> · <b>show trips</b> · <b>go to map</b> · <b>dark mode</b> · <b>search Mumbai</b>
+      </div>
+      <button class="btn btn-sm" id="voice-stop">Close</button>
+    </div>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"

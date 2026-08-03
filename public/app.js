@@ -75,6 +75,8 @@ function showLogin() {
   $('#app').classList.add('hidden');
   $('#login-screen').classList.remove('hidden');
   state.user = null;
+  showAuthView('signin');
+  refreshAuthStats();
 }
 function showApp() {
   $('#login-screen').classList.add('hidden');
@@ -100,9 +102,47 @@ function populateProfile() {
   $('#profile-initials').textContent = initialsOf(state.user.name);
 }
 
+function showAuthView(name) {
+  for (const v of ['signin', 'signup', 'forgot']) {
+    const el = $('#view-' + v);
+    if (!el) continue;
+    el.classList.toggle('hidden', v !== name);
+  }
+  // Clear errors
+  for (const id of ['login-error', 'signup-error', 'forgot-error', 'forgot-ok']) {
+    const el = $('#' + id); if (el) el.textContent = '';
+  }
+}
+
+async function refreshAuthStats() {
+  // Public KPIs (no auth needed) for the side panel — fetch in parallel.
+  const opts = { credentials: 'omit' };
+  try {
+    const r = await fetch('/api/health-stats', { credentials: 'omit' });
+    if (!r.ok) return;
+    const d = await r.json();
+    if ($('#auth-stat-v')) $('#auth-stat-v').textContent = d.vehicles ?? '—';
+    if ($('#auth-stat-t')) $('#auth-stat-t').textContent = d.trips ?? '—';
+    if ($('#auth-stat-d')) $('#auth-stat-d').textContent = d.drivers ?? '—';
+  } catch {}
+}
+
+function passwordStrength(pw) {
+  let score = 0;
+  if (pw.length >= 6) score++;
+  if (pw.length >= 10) score++;
+  if (/[A-Z]/.test(pw) && /[a-z]/.test(pw)) score++;
+  if (/\d/.test(pw)) score++;
+  if (/[^A-Za-z0-9]/.test(pw)) score++;
+  return Math.min(4, score);
+}
+
 $('#login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   $('#login-error').textContent = '';
+  const btn = $('#login-form button[type="submit"]');
+  const original = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Signing in…';
   try {
     const { user } = await api('/auth/login', {
       method: 'POST',
@@ -113,13 +153,93 @@ $('#login-form').addEventListener('submit', async (e) => {
     showApp();
     connectWS();
   } catch (err) { $('#login-error').textContent = err.message; }
+  finally { btn.disabled = false; btn.textContent = original; }
 });
+
+$('#signup-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $('#signup-error').textContent = '';
+  const name  = $('#su-name').value.trim();
+  const email = $('#su-email').value.trim();
+  const pw    = $('#su-password').value;
+  const role  = $('#su-role').value;
+  if (!name || !email || !pw) { $('#signup-error').textContent = 'All fields are required.'; return; }
+  if (pw.length < 6) { $('#signup-error').textContent = 'Password must be at least 6 characters.'; return; }
+  const btn = $('#signup-form button[type="submit"]');
+  const original = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Creating account…';
+  try {
+    await api('/auth/signup', { method: 'POST', body: { name, email, password: pw, role } });
+    // Auto-login after signup
+    const { user } = await api('/auth/login', { method: 'POST', body: { email, password: pw } });
+    state.user = user;
+    toast(`Welcome to Vaelos, ${user.name}!`);
+    showApp();
+    connectWS();
+  } catch (err) { $('#signup-error').textContent = err.message; }
+  finally { btn.disabled = false; btn.textContent = original; }
+});
+
+$('#forgot-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $('#forgot-error').textContent = '';
+  $('#forgot-ok').textContent = '';
+  const email = $('#fp-email').value.trim();
+  if (!email) { $('#forgot-error').textContent = 'Email is required.'; return; }
+  try {
+    const r = await api('/auth/forgot', { method: 'POST', body: { email } });
+    $('#forgot-ok').textContent = r.message || 'Check your inbox for the reset link.';
+  } catch (err) { $('#forgot-error').textContent = err.message; }
+});
+
+// View switchers
+$('#goto-signup')?.addEventListener('click',  (e) => { e.preventDefault(); showAuthView('signup'); });
+$('#goto-signin')?.addEventListener('click',  (e) => { e.preventDefault(); showAuthView('signin'); });
+$('#forgot-link')?.addEventListener('click',  (e) => { e.preventDefault(); showAuthView('forgot'); });
+$('#back-signin')?.addEventListener('click',  (e) => { e.preventDefault(); showAuthView('signin'); });
+
+// Password visibility toggles
+document.querySelectorAll('.pw-toggle').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const id = btn.dataset.target;
+    const inp = $('#' + id);
+    if (!inp) return;
+    inp.type = inp.type === 'password' ? 'text' : 'password';
+    btn.textContent = inp.type === 'password' ? '👁️' : '🙈';
+  });
+});
+
+// Password strength meter
+$('#su-password')?.addEventListener('input', (e) => {
+  const v = e.target.value;
+  const s = passwordStrength(v);
+  const meter = $('#pw-strength'); if (meter) { meter.className = 'pw-strength s' + s; }
+  const text = $('#pw-strength-text');
+  if (text) {
+    const labels = ['', 'Weak — add length & numbers', 'Fair — mix cases', 'Good — try a symbol', 'Strong 💪'];
+    text.textContent = v ? labels[s] : '';
+  }
+});
+
+// Demo autofill buttons
+document.querySelectorAll('#demo-list button[data-fill]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    try {
+      const d = JSON.parse(btn.dataset.fill);
+      const e = $('#email'); if (e) e.value = d.email;
+      const p = $('#password'); if (p) p.value = d.password;
+      e?.focus();
+    } catch {}
+  });
+});
+
 function doLogout() {
   return (async () => {
     try { await api('/auth/logout', { method: 'POST' }); } catch {}
     if (state.ws) try { state.ws.close(); } catch {}
     $('#ai-panel').classList.add('hidden');
     $('#ai-fab').classList.add('hidden');
+    search.invalidate();
     showLogin();
   })();
 }
@@ -372,34 +492,33 @@ async function renderSearchDropdown(q) {
     res = await api('/search?q=' + encodeURIComponent(q));
   } catch {
     await search.data;
-    res = searchRunQuery(q);
+    const local = searchRunQuery(q);
+    res = {
+      vehicles:    local.vehicles.map(x => x.v),
+      drivers:     local.drivers.map(x => x.d),
+      trips:       local.trips.map(x => x.t),
+      maintenance: local.maintenance.map(x => x.m),
+    };
   }
-  // Normalize: server returns { vehicles: [...] } but no score; the shape is
-  // compatible with the dropdown renderer if we treat each item as a single
-  // hit. The cached path returns [{v, sc}] pairs — flatten those.
-  const flat = (arr, key) => arr.map(it => it[key] || it);
-  res = {
-    vehicles:    flat(res.vehicles,    'v'),
-    drivers:     flat(res.drivers,     'd'),
-    trips:       flat(res.trips,       't'),
-    maintenance: flat(res.maintenance, 'm'),
-  };
-  const total = res.vehicles.length + res.drivers.length + res.trips.length + res.maintenance.length;
+  const total = (res.vehicles||[]).length + (res.drivers||[]).length + (res.trips||[]).length + (res.maintenance||[]).length;
   if (total === 0) {
     dd.innerHTML = `<div class="search-empty">🔍 No matches for "<b>${escapeHtml(q)}</b>"<br><span style="font-size:.78rem">Try a plate, driver name, city, or trip #</span></div>`;
     dd.classList.remove('hidden');
     return;
   }
+  // Normalise every item to have a stable shape: { v, d, t, m } = item itself.
+  const wrap = (arr, key) => (arr || []).map(it => ({ [key]: it }));
   const section = (title, items, kind) => {
     if (!items.length) return '';
-    const rows = items.slice(0, 5).map(({ v, d, t, m }) => {
+    const rows = items.slice(0, 5).map(entry => {
+      const v = entry.v, d = entry.d, t = entry.t, m = entry.m;
       if (kind === 'vehicle') {
         const cur = Number(v.current_load_kg || 0), max = Number(v.max_load_kg || 0);
         return `<div class="search-item" data-kind="vehicle" data-page="vehicles">
           <div class="ico">🚐</div>
           <div class="body">
             <div class="title">${highlight(v.reg_no + ' · ' + v.name, q)}</div>
-            <div class="sub">${highlight(v.type, q)} · ${highlight(v.region, q)} · ${cur}/${max} kg · ${statusPill(v.status)}</div>
+            <div class="sub">${highlight(v.type, q)} · ${highlight(v.region, q)} · ${fmtKm(cur)}/${fmtKm(max)} kg · ${statusPill(v.status)}</div>
           </div>
         </div>`;
       } else if (kind === 'driver') {
@@ -414,7 +533,7 @@ async function renderSearchDropdown(q) {
         return `<div class="search-item" data-kind="trip" data-page="trips">
           <div class="ico">📦</div>
           <div class="body">
-            <div class="title">Trip #${t.id} · ${highlight(t.source + ' → ' + t.destination, q)}</div>
+            <div class="title">Trip #${t.id} · ${highlight((t.source || '') + ' → ' + (t.destination || ''), q)}</div>
             <div class="sub">${highlight(t.vehicle_reg || '', q)} · ${highlight(t.driver_name || '', q)} · ${statusPill(t.status)}</div>
           </div>
         </div>`;
@@ -422,8 +541,8 @@ async function renderSearchDropdown(q) {
         return `<div class="search-item" data-kind="maintenance" data-page="maintenance">
           <div class="ico">🛠️</div>
           <div class="body">
-            <div class="title">${highlight(m.vehicle_reg + ' — ' + m.description, q)}</div>
-            <div class="sub">${fmtINR(m.cost)} · ${highlight(m.status, q)}</div>
+            <div class="title">${highlight((m.vehicle_reg || '') + ' — ' + (m.description || ''), q)}</div>
+            <div class="sub">${fmtINR(m.cost)} · ${highlight(m.status || '', q)}</div>
           </div>
         </div>`;
       }
@@ -432,10 +551,10 @@ async function renderSearchDropdown(q) {
     return `<div class="search-section-title">${title} (${items.length})</div>${rows}${more}`;
   };
   dd.innerHTML =
-    section('Vehicles',     res.vehicles,     'vehicle') +
-    section('Drivers',      res.drivers,      'driver') +
-    section('Trips',        res.trips,        'trip') +
-    section('Maintenance',  res.maintenance,  'maintenance');
+    section('Vehicles',     wrap(res.vehicles,    'v'), 'vehicle') +
+    section('Drivers',      wrap(res.drivers,     'd'), 'driver') +
+    section('Trips',        wrap(res.trips,       't'), 'trip') +
+    section('Maintenance',  wrap(res.maintenance, 'm'), 'maintenance');
   dd.classList.remove('hidden');
   dd.querySelectorAll('.search-item').forEach(el => {
     el.addEventListener('click', () => {
@@ -1702,7 +1821,21 @@ async function renderUsers(c) {
   });
 }
 
-// =================== Voice Commands (Web Speech API) =================== //
+// =================== Voice Commands (Web Speech API + text fallback) =================== //
+// Why this module is robust:
+//  - Web Speech API only works in Chromium-family browsers served over HTTPS or
+//    on localhost. Over plain HTTP from a LAN/WAN IP the mic is permanently
+//    blocked ("network" error). We detect that and fall back to a text-input
+//    command bar so the user is never stuck.
+//  - We attempt `getUserMedia({audio:true})` FIRST so the permission prompt
+//    surfaces a clear Allow/Deny choice; only then do we start recognition.
+//  - Each utterance creates a fresh SpeechRecognition instance because some
+//    browsers leak state across sessions.
+//  - Every error path toasts the actual reason ("not-allowed", "no-speech",
+//    "network", "aborted") so the user knows what's wrong.
+//  - The text input lives in the same overlay, so voice and text share the
+//    exact same grammar and command router.
+
 const VOICE_GRAMMAR = [
   { rx: /\bdashboard\b|\bhome\b/,                   page: 'dashboard' },
   { rx: /\b(vehicle|vehicles|truck|trucks|van|vans|bus|buses|car|cars|fleet)\b/, page: 'vehicles' },
@@ -1727,26 +1860,77 @@ const VOICE_GRAMMAR = [
 
 function setupVoice() {
   const btn = $('#voice-btn');
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!btn) return;
-  if (!SR) {
-    btn.title = 'Voice not supported on this browser';
-    btn.style.opacity = .45;
-    btn.style.cursor = 'not-allowed';
-    btn.addEventListener('click', () => toast('Voice commands are not supported in this browser. Try Chrome/Edge.', 'error'));
-    return;
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const isSecure = location.protocol === 'https:' || location.hostname === 'localhost' ||
+                   location.hostname.startsWith('127.') || location.hostname.endsWith('.localhost');
+  const supported = !!SR && isSecure;
+
+  if (!supported) {
+    btn.title = SR ? 'Voice requires HTTPS' : 'Voice not supported in this browser';
+    btn.style.opacity = .65;
   }
-  let active = false;
-  function start() {
+
+  let active = false, stream = null;
+  async function probeMic() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return false;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      return true;
+    } catch (err) {
+      return { error: err.name || 'denied', message: err.message };
+    }
+  }
+
+  function showOverlay(mode) {
+    const overlay = $('#voice-overlay');
+    if (!overlay) return;
+    overlay.classList.remove('hidden');
+    overlay.dataset.mode = mode;
+  }
+  function hideOverlay() {
+    const overlay = $('#voice-overlay');
+    if (overlay) overlay.classList.add('hidden');
+    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  }
+
+  async function start() {
     if (active) return;
     active = true;
+    // Probe mic first; this surfaces the real reason if it fails.
+    const probe = await probeMic();
+    if (probe === false) {
+      active = false;
+      toast('🎙️ Microphone API unavailable in this browser.', 'error');
+      return;
+    }
+    if (probe && probe.error) {
+      active = false;
+      if (probe.error === 'NotAllowedError' || probe.error === 'PermissionDeniedError') {
+        toast('🎙️ Microphone access denied. Click the lock icon in the address bar → Allow microphone.', 'error');
+      } else if (probe.error === 'NotFoundError') {
+        toast('🎙️ No microphone found on this device.', 'error');
+      } else {
+        toast('🎙️ Microphone error: ' + probe.error, 'error');
+      }
+      return;
+    }
+    if (!supported) {
+      // SR not available / not on HTTPS — open the text fallback overlay.
+      showOverlay('text');
+      const tv = $('#voice-text');
+      if (tv) tv.textContent = 'Type a command (e.g. "open vehicles", "show trips")';
+      const ti = $('#voice-text-input');
+      if (ti) { ti.value = ''; setTimeout(() => ti.focus(), 30); }
+      active = false;
+      return;
+    }
     let r;
-    try { r = new SR(); } catch { active = false; return; }
+    try { r = new SR(); } catch (err) { active = false; hideOverlay(); toast('🎙️ Could not start voice: ' + err.message, 'error'); return; }
     r.continuous = false;
     r.interimResults = true;
     r.lang = 'en-US';
     r.maxAlternatives = 1;
-
     let finalTranscript = '';
     r.onresult = (e) => {
       let interim = '';
@@ -1762,51 +1946,60 @@ function setupVoice() {
     };
     r.onerror = (e) => {
       active = false;
-      const overlay = $('#voice-overlay');
-      if (overlay) overlay.classList.add('hidden');
-      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+      hideOverlay();
+      const reason = e.error || 'unknown';
+      if (reason === 'not-allowed' || reason === 'service-not-allowed') {
         toast('🎙️ Microphone access denied. Allow it in browser settings.', 'error');
-      } else if (e.error === 'no-speech') {
-        toast('🎙️ No speech detected — try again.', 'error');
-      } else if (e.error && e.error !== 'aborted') {
-        toast('🎙️ Voice error: ' + e.error, 'error');
+      } else if (reason === 'no-speech') {
+        toast('🎙️ No speech detected — try again or use the text box.', 'error');
+      } else if (reason === 'network') {
+        toast('🎙️ Voice needs HTTPS. Use the text command bar instead (Ctrl+Space).', 'error');
+        showOverlay('text');
+        const ti = $('#voice-text-input'); if (ti) setTimeout(() => ti.focus(), 30);
+      } else if (reason && reason !== 'aborted') {
+        toast('🎙️ Voice error: ' + reason + '. Falling back to text.', 'error');
+        showOverlay('text');
       }
     };
     r.onend = () => {
       active = false;
-      const overlay = $('#voice-overlay');
-      if (overlay) overlay.classList.add('hidden');
+      hideOverlay();
       const t = finalTranscript.trim();
       if (t) handleVoiceCommand(t.toLowerCase());
     };
-
-    const overlay = $('#voice-overlay');
-    if (overlay) overlay.classList.remove('hidden');
-    const tv = $('#voice-text');
-    if (tv) tv.textContent = 'Listening…';
+    showOverlay('voice');
+    const tv = $('#voice-text'); if (tv) tv.textContent = 'Listening…';
     try { r.start(); }
     catch (err) {
-      active = false;
-      if (overlay) overlay.classList.add('hidden');
+      active = false; hideOverlay();
       toast('🎙️ Could not start voice: ' + err.message, 'error');
     }
   }
 
   btn.addEventListener('click', start);
   const stopBtn = $('#voice-stop');
-  if (stopBtn) {
-    stopBtn.addEventListener('click', () => {
-      // Abort any in-flight recognition by reloading the recognition flow.
-      // Browsers don't expose `state.recognition.stop()` reliably here because
-      // we recreate it per session — but toggling active + hiding the overlay
-      // is enough; the next start() will replace it.
-      active = false;
-      const overlay = $('#voice-overlay');
-      if (overlay) overlay.classList.add('hidden');
+  if (stopBtn) stopBtn.addEventListener('click', () => { active = false; hideOverlay(); });
+
+  // Text-command fallback (always works, even when mic is denied)
+  const textInput = $('#voice-text-input');
+  const textSubmit = $('#voice-text-submit');
+  if (textInput) {
+    textInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const t = textInput.value.trim();
+        if (!t) return;
+        handleVoiceCommand(t.toLowerCase());
+        textInput.value = '';
+        hideOverlay();
+      } else if (e.key === 'Escape') {
+        hideOverlay();
+      }
     });
   }
+  if (textSubmit) textSubmit.addEventListener('click', () => textInput?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })));
 
-  // Keyboard shortcut: hold Ctrl (or Cmd) and press Space to trigger voice.
+  // Ctrl+Space (or Cmd+Space) opens either voice or text fallback.
   document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.code === 'Space') {
       e.preventDefault();
@@ -1900,10 +2093,10 @@ function setupHealthIndicator() {
   const d = document.createElement('div');
   d.id = 'health-dot';
   d.title = 'Server status';
-  d.style.cssText = 'display:inline-flex;align-items:center;gap:.3rem;font-size:.72rem;color:var(--text-soft);margin-right:.4rem';
+  d.style.cssText = 'display:inline-flex;align-items:center;gap:.35rem;font-size:.72rem;color:var(--text-soft);margin-right:.2rem;padding-right:.5rem;border-right:1px solid var(--border)';
   d.innerHTML = '<span style="width:8px;height:8px;border-radius:50%;background:var(--success);box-shadow:0 0 0 3px rgba(16,185,129,.18);transition:background .2s"></span><span>online</span>';
-  const anchor = $('#theme-icon');
-  if (anchor) anchor.parentNode.insertBefore(d, anchor);
+  const right = document.querySelector('.topbar-right');
+  if (right) right.insertBefore(d, right.firstChild);
 
   async function ping() {
     try {
