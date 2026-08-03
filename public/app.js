@@ -150,7 +150,6 @@ document.addEventListener('keydown', (e) => {
     $('#ai-panel').classList.add('hidden');
   }
 });
-$('#profile-theme').addEventListener('click', () => { toggleTheme(); closeProfileMenu(); });
 $('#profile-logout').addEventListener('click', () => { closeProfileMenu(); doLogout(); });
 
 // =================== WebSocket live =================== //
@@ -198,7 +197,6 @@ const NAV_ITEMS = [
   { id: 'reports',       label: '📈 Reports',         roles: ['*'] },
   { id: 'audit',         label: '📋 Audit Log',       roles: ['Fleet Manager','Safety Officer'] },
   { id: 'ai',            label: '🤖 AI Assistant',    roles: ['*'] },
-  { id: 'notifications', label: '🔔 Notifications',   roles: ['*'] },
   { id: 'users',         label: '👥 Users',           roles: ['Fleet Manager'] },
 ];
 
@@ -262,7 +260,6 @@ async function render() {
       case 'reports':       await renderReports(c); break;
       case 'audit':         await renderAudit(c); break;
       case 'ai':            await renderAI(c); break;
-      case 'notifications': await renderNotifications(c); break;
       case 'users':         await renderUsers(c); break;
     }
     updateNotifBadge();
