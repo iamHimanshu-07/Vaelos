@@ -221,17 +221,38 @@ $('#su-password')?.addEventListener('input', (e) => {
   }
 });
 
-// Demo autofill buttons
-document.querySelectorAll('#demo-list button[data-fill]').forEach(btn => {
-  btn.addEventListener('click', () => {
+// Demo autofill buttons — click to autofill, hold Shift to autofill AND submit.
+document.querySelectorAll('button[data-fill]').forEach(btn => {
+  btn.addEventListener('click', (ev) => {
     try {
       const d = JSON.parse(btn.dataset.fill);
       const e = $('#email'); if (e) e.value = d.email;
       const p = $('#password'); if (p) p.value = d.password;
+      // Make sure sign-in view is visible in case the user is on another view.
+      if (typeof showAuthView === 'function') showAuthView('signin');
       e?.focus();
+      // Shift-click submits immediately so evaluators can land in the app
+      // with a single click. Plain click just autofills (lets them inspect).
+      if (ev.shiftKey) {
+        $('#login-form')?.dispatchEvent(new Event('submit', { cancelable: true }));
+      }
     } catch {}
   });
 });
+
+// Subtle stagger animation for the auth-side feature list so the page feels alive.
+(function animateAuthFeatures() {
+  const items = document.querySelectorAll('.auth-features li');
+  items.forEach((el, i) => {
+    el.style.opacity = '0';
+    el.style.transform = 'translateY(6px)';
+    el.style.transition = 'opacity .45s var(--ease, ease), transform .45s var(--ease, ease)';
+    setTimeout(() => {
+      el.style.opacity = '1';
+      el.style.transform = 'translateY(0)';
+    }, 120 + i * 80);
+  });
+})();
 
 function doLogout() {
   return (async () => {
@@ -1612,12 +1633,22 @@ function drawBars(sel, items) {
 
 // =================== Audit Log =================== //
 async function renderAudit(c) {
-  const logs = await api('/audit?limit=200');
+  const isOwner = state.user && state.user.email === 'itshimanshu666@gmail.com';
+  const wantAll = state._auditScope === 'all' && isOwner;
+  const url = '/api/audit?limit=200' + (wantAll ? '&scope=all' : '');
+  const logs = await api(url);
   c.innerHTML = `
     <div class="card">
       <div class="flex-between mb-1">
-        <h3>📋 Audit Log — Activity Timeline</h3>
-        <span class="text-soft" style="font-size:.85rem">${logs.length} most recent events</span>
+        <h3>📋 Audit Log${isOwner ? ' — Activity Timeline' : ' — Your Activity'}</h3>
+        <div class="flex" style="gap:.4rem;align-items:center">
+          ${isOwner ? `
+            <div class="scope-toggle">
+              <button class="scope-btn ${!wantAll ? 'on' : ''}" data-scope="me">My activity</button>
+              <button class="scope-btn ${wantAll ? 'on' : ''}"  data-scope="all">All activity</button>
+            </div>
+          ` : '<span class="text-soft" style="font-size:.85rem">Only your actions are shown</span>'}
+        </div>
       </div>
       <div class="timeline">
         ${logs.length === 0 ? '<p class="text-soft">No activity yet.</p>' : logs.map(l => `
@@ -1633,6 +1664,14 @@ async function renderAudit(c) {
       </div>
     </div>
   `;
+  if (isOwner) {
+    c.querySelectorAll('.scope-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        state._auditScope = btn.dataset.scope;
+        renderAudit(c);
+      });
+    });
+  }
 }
 
 // =================== AI Assistant (chat) =================== //

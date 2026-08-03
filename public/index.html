@@ -56,15 +56,30 @@
               <button type="submit" class="btn btn-primary btn-block">Sign in</button>
               <div id="login-error" class="error"></div>
             </form>
-            <div class="auth-switch">No account? <a class="auth-link" id="goto-signup" href="#">Create one →</a></div>
+            <div class="auth-switch signup-cta">New here? <a class="auth-link" id="goto-signup" href="#"><b>Create your account →</b></a></div>
             <details class="demo">
-              <summary>Demo accounts (click to autofill)</summary>
-              <ul id="demo-list">
-                <li><button type="button" data-fill='{"email":"admin@vaelos.com","password":"admin123"}'><b>Fleet Manager</b><br>admin@vaelos.com / admin123</button></li>
-                <li><button type="button" data-fill='{"email":"alex@vaelos.com","password":"driver123"}'><b>Driver</b><br>alex@vaelos.com / driver123</button></li>
-                <li><button type="button" data-fill='{"email":"sarah@vaelos.com","password":"safety123"}'><b>Safety Officer</b><br>sarah@vaelos.com / safety123</button></li>
-                <li><button type="button" data-fill='{"email":"felix@vaelos.com","password":"finance123"}'><b>Financial Analyst</b><br>felix@vaelos.com / finance123</button></li>
-              </ul>
+              <summary>Or try a demo account</summary>
+              <div class="demo-line">
+                <button type="button" class="demo-btn primary" data-fill='{"email":"admin@vaelos.com","password":"admin123"}'>
+                  <span class="demo-role">Fleet Manager</span>
+                  <span class="demo-creds">admin@vaelos.com / admin123</span>
+                </button>
+              </div>
+              <div class="demo-grid">
+                <button type="button" class="demo-btn" data-fill='{"email":"alex@vaelos.com","password":"driver123"}'>
+                  <span class="demo-role">🚐 Driver</span>
+                  <span class="demo-creds">alex@vaelos.com</span>
+                </button>
+                <button type="button" class="demo-btn" data-fill='{"email":"sarah@vaelos.com","password":"safety123"}'>
+                  <span class="demo-role">🛡️ Safety Officer</span>
+                  <span class="demo-creds">sarah@vaelos.com</span>
+                </button>
+                <button type="button" class="demo-btn" data-fill='{"email":"felix@vaelos.com","password":"finance123"}'>
+                  <span class="demo-role">📈 Financial Analyst</span>
+                  <span class="demo-creds">felix@vaelos.com</span>
+                </button>
+              </div>
+              <div class="demo-hint">Demo logins run against isolated starter data — your changes won't affect other visitors.</div>
             </details>
           </div>
 
@@ -94,7 +109,7 @@
               <button type="submit" class="btn btn-primary btn-block">Create account</button>
               <div id="signup-error" class="error"></div>
             </form>
-            <div class="auth-switch">Already have an account? <a class="auth-link" id="goto-signin" href="#">Sign in →</a></div>
+            <div class="auth-switch">Already onboarded? <a class="auth-link" id="goto-signin" href="#">Sign in instead</a></div>
           </div>
 
           <!-- FORGOT view -->

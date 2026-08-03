@@ -2,7 +2,8 @@
  * Vaelos - Business logic / operations layer.
  * All required business rules live here.
  */
-const { db, recomputeLicenseNotifications, writeAudit } = require('./database');
+const { db, recomputeLicenseNotifications, writeAudit,
+        isDemoEmail, ensureDemoClone, demoFilter } = require('./database');
 
 const now = () => new Date().toISOString().slice(0, 19);
 
@@ -29,9 +30,10 @@ function deleteUser(ctx, id) {
 }
 
 // ============================== VEHICLES ============================== //
-function listVehicles(filters = {}) {
-  let q = 'SELECT * FROM vehicles WHERE 1=1';
-  const args = [];
+function listVehicles(filters = {}, viewerEmail) {
+  const f = demoFilter(viewerEmail);
+  let q = `SELECT * FROM vehicles WHERE ${f.where}`;
+  const args = [...f.args];
   if (filters.type && filters.type !== 'All')   { q += ' AND type = ?';   args.push(filters.type); }
   if (filters.status && filters.status !== 'All'){q += ' AND status = ?'; args.push(filters.status); }
   if (filters.region && filters.region !== 'All'){q += ' AND region = ?'; args.push(filters.region); }
@@ -39,10 +41,12 @@ function listVehicles(filters = {}) {
   const vehicles = db.prepare(q).all(...args);
   // Decorate each vehicle with `current_load_kg`: the cargo carried on a
   // currently-Dispatched trip, or 0 when the vehicle is idle.
+  const loadArgs = isDemoEmail(viewerEmail) ? f.args : [];
   const loadByVehicle = db.prepare(
     `SELECT vehicle_id, COALESCE(SUM(cargo_kg),0) c
-       FROM trips WHERE status='Dispatched' GROUP BY vehicle_id`
-  ).all();
+       FROM trips WHERE status='Dispatched' ${isDemoEmail(viewerEmail) ? 'AND _demo_owner = ?' : ''}
+       GROUP BY vehicle_id`
+  ).all(...loadArgs);
   const loadMap = Object.fromEntries(loadByVehicle.map(r => [r.vehicle_id, r.c]));
   for (const v of vehicles) v.current_load_kg = loadMap[v.id] || 0;
   return vehicles;
@@ -74,9 +78,10 @@ function deleteVehicle(ctx, id) {
 }
 
 // ============================== DRIVERS ============================== //
-function listDrivers(filters = {}) {
-  let q = 'SELECT * FROM drivers WHERE 1=1';
-  const args = [];
+function listDrivers(filters = {}, viewerEmail) {
+  const f = demoFilter(viewerEmail);
+  let q = `SELECT * FROM drivers WHERE ${f.where}`;
+  const args = [...f.args];
   if (filters.status && filters.status !== 'All') { q += ' AND status = ?'; args.push(filters.status); }
   q += ' ORDER BY name';
   return db.prepare(q).all(...args);
@@ -122,14 +127,15 @@ function isVehicleAssignable(v) {
   return [true, ''];
 }
 
-function listTrips(filters = {}) {
+function listTrips(filters = {}, viewerEmail) {
+  const f = demoFilter(viewerEmail, 't');
   let q = `SELECT t.*, v.reg_no AS vehicle_reg, v.name AS vehicle_name,
                   d.name AS driver_name
            FROM trips t
            JOIN vehicles v ON v.id = t.vehicle_id
            JOIN drivers d ON d.id = t.driver_id
-           WHERE 1=1`;
-  const args = [];
+           WHERE ${f.where}`;
+  const args = [...f.args];
   if (filters.status && filters.status !== 'All') { q += ' AND t.status = ?'; args.push(filters.status); }
   q += ' ORDER BY t.id DESC';
   return db.prepare(q).all(...args);
@@ -228,10 +234,11 @@ function cancelTrip(ctx, id) {
 }
 
 // ============================== MAINTENANCE ============================== //
-function listMaintenance(vid = null) {
+function listMaintenance(vid = null, viewerEmail) {
+  const f = demoFilter(viewerEmail, 'm');
   let q = `SELECT m.*, v.reg_no AS vehicle_reg, v.name AS vehicle_name
-           FROM maintenance m JOIN vehicles v ON v.id = m.vehicle_id WHERE 1=1`;
-  const args = [];
+           FROM maintenance m JOIN vehicles v ON v.id = m.vehicle_id WHERE ${f.where}`;
+  const args = [...f.args];
   if (vid) { q += ' AND m.vehicle_id = ?'; args.push(vid); }
   q += ' ORDER BY m.id DESC';
   return db.prepare(q).all(...args);
@@ -273,15 +280,21 @@ function deleteMaintenance(ctx, mid) {
 }
 
 // ============================== FUEL & EXPENSES ============================== //
-function listFuel(vid = null) {
+function listFuel(vid = null, viewerEmail) {
+  const f = demoFilter(viewerEmail, 'f');
   let q = `SELECT f.*, v.reg_no AS vehicle_reg
-           FROM fuel_logs f JOIN vehicles v ON v.id = f.vehicle_id WHERE 1=1`;
-  const args = [];
+           FROM fuel_logs f JOIN vehicles v ON v.id = f.vehicle_id WHERE ${f.where}`;
+  const args = [...f.args];
   if (vid) { q += ' AND f.vehicle_id = ?'; args.push(vid); }
   q += ' ORDER BY f.id DESC';
   return db.prepare(q).all(...args);
 }
 function addFuel(ctx, { vehicle_id, liters, cost, log_date, odometer_km, trip_id = null }) {
+  // Drivers can only log fuel against vehicles they have actually driven
+  // (current/most-recent trip assigned to them). Fleet roles pass through.
+  if (ctx?.user?.role === 'Driver' && !driverAssignedToVehicle(ctx.user, vehicle_id)) {
+    return [false, 'Drivers can only log fuel for vehicles they have driven.'];
+  }
   const r = db.prepare(
     `INSERT INTO fuel_logs
      (vehicle_id,trip_id,liters,cost,log_date,odometer_km,created_at)
@@ -289,16 +302,21 @@ function addFuel(ctx, { vehicle_id, liters, cost, log_date, odometer_km, trip_id
   ).run(vehicle_id, trip_id, +liters, +cost, log_date, +odometer_km || null, now());
   audit(ctx, 'fuel', r.lastInsertRowid, 'create',
         `Fuel log: ${liters}L, ₹${cost}`);
+  return [true, 'Fuel log saved.'];
 }
-function listExpenses(vid = null) {
+function listExpenses(vid = null, viewerEmail) {
+  const f = demoFilter(viewerEmail, 'e');
   let q = `SELECT e.*, v.reg_no AS vehicle_reg
-           FROM expenses e LEFT JOIN vehicles v ON v.id = e.vehicle_id WHERE 1=1`;
-  const args = [];
+           FROM expenses e LEFT JOIN vehicles v ON v.id = e.vehicle_id WHERE ${f.where}`;
+  const args = [...f.args];
   if (vid) { q += ' AND e.vehicle_id = ?'; args.push(vid); }
   q += ' ORDER BY e.id DESC';
   return db.prepare(q).all(...args);
 }
 function addExpense(ctx, { vehicle_id, category, description, amount, expense_date }) {
+  if (ctx?.user?.role === 'Driver' && vehicle_id && !driverAssignedToVehicle(ctx.user, vehicle_id)) {
+    return [false, 'Drivers can only log expenses for vehicles they have driven.'];
+  }
   const r = db.prepare(
     `INSERT INTO expenses
      (vehicle_id,category,description,amount,expense_date,created_at)
@@ -306,18 +324,35 @@ function addExpense(ctx, { vehicle_id, category, description, amount, expense_da
   ).run(vehicle_id || null, category, description || '', +amount, expense_date, now());
   audit(ctx, 'expense', r.lastInsertRowid, 'create',
         `${category}: ₹${amount}`);
+  return [true, 'Expense saved.'];
+}
+
+// Returns true if the user's driver_id has any current/most-recent trip
+// linked to the given vehicle. Drivers without a linked driver_id are
+// treated as not-assigned.
+function driverAssignedToVehicle(user, vehicle_id) {
+  if (!user || !user.driver_id) return false;
+  const row = db.prepare(
+    `SELECT id FROM trips
+     WHERE vehicle_id=? AND driver_id=? AND status IN ('Dispatched','Completed')
+     ORDER BY id DESC LIMIT 1`
+  ).get(vehicle_id, user.driver_id);
+  return !!row;
 }
 
 // ============================== ANALYTICS ============================== //
-function dashboardKpis() {
-  const get = (sql) => db.prepare(sql).get().c;
-  const total = get('SELECT COUNT(*) c FROM vehicles');
-  const activeV = get(`SELECT COUNT(*) c FROM vehicles WHERE status='On Trip'`);
-  const availableV = get(`SELECT COUNT(*) c FROM vehicles WHERE status='Available'`);
-  const inShop = get(`SELECT COUNT(*) c FROM vehicles WHERE status='In Shop'`);
-  const activeT = get(`SELECT COUNT(*) c FROM trips WHERE status='Dispatched'`);
-  const pendingT = get(`SELECT COUNT(*) c FROM trips WHERE status='Draft'`);
-  const onDuty = get(`SELECT COUNT(*) c FROM drivers WHERE status='On Trip'`);
+function dashboardKpis(viewerEmail) {
+  const f = demoFilter(viewerEmail);
+  const fWhere = f.where;
+  const fArgs = f.args;
+  const get = (sql, ...args) => db.prepare(sql).get(...args).c;
+  const total = get(`SELECT COUNT(*) c FROM vehicles WHERE ${fWhere}`, ...fArgs);
+  const activeV = get(`SELECT COUNT(*) c FROM vehicles WHERE ${fWhere} AND status='On Trip'`, ...fArgs);
+  const availableV = get(`SELECT COUNT(*) c FROM vehicles WHERE ${fWhere} AND status='Available'`, ...fArgs);
+  const inShop = get(`SELECT COUNT(*) c FROM vehicles WHERE ${fWhere} AND status='In Shop'`, ...fArgs);
+  const activeT = get(`SELECT COUNT(*) c FROM trips WHERE ${fWhere} AND status='Dispatched'`, ...fArgs);
+  const pendingT = get(`SELECT COUNT(*) c FROM trips WHERE ${fWhere} AND status='Draft'`, ...fArgs);
+  const onDuty = get(`SELECT COUNT(*) c FROM drivers WHERE ${fWhere} AND status='On Trip'`, ...fArgs);
   return {
     active_vehicles: activeV,
     available_vehicles: availableV,
@@ -330,20 +365,21 @@ function dashboardKpis() {
   };
 }
 
-function vehicleMetrics() {
-  const vehicles = db.prepare('SELECT * FROM vehicles').all();
+function vehicleMetrics(viewerEmail) {
+  const f = demoFilter(viewerEmail);
+  const vehicles = db.prepare(`SELECT * FROM vehicles WHERE ${f.where}`).all(...f.args);
   return vehicles.map((v) => {
-    const fuel = db.prepare('SELECT COALESCE(SUM(cost),0) c FROM fuel_logs WHERE vehicle_id=?').get(v.id).c;
-    const maint = db.prepare('SELECT COALESCE(SUM(cost),0) c FROM maintenance WHERE vehicle_id=?').get(v.id).c;
-    const misc = db.prepare('SELECT COALESCE(SUM(amount),0) c FROM expenses WHERE vehicle_id=?').get(v.id).c;
+    const fuel = db.prepare(`SELECT COALESCE(SUM(cost),0) c FROM fuel_logs WHERE ${f.where} AND vehicle_id=?`).get(...f.args, v.id).c;
+    const maint = db.prepare(`SELECT COALESCE(SUM(cost),0) c FROM maintenance WHERE ${f.where} AND vehicle_id=?`).get(...f.args, v.id).c;
+    const misc = db.prepare(`SELECT COALESCE(SUM(amount),0) c FROM expenses WHERE ${f.where} AND vehicle_id=?`).get(...f.args, v.id).c;
     const distance = db.prepare(
       `SELECT COALESCE(SUM(end_odometer-start_odometer),0) d
-       FROM trips WHERE vehicle_id=? AND status='Completed'`
-    ).get(v.id).d;
-    const fuel_liters = db.prepare('SELECT COALESCE(SUM(liters),0) l FROM fuel_logs WHERE vehicle_id=?').get(v.id).l;
+       FROM trips WHERE ${f.where} AND vehicle_id=? AND status='Completed'`
+    ).get(...f.args, v.id).d;
+    const fuel_liters = db.prepare(`SELECT COALESCE(SUM(liters),0) l FROM fuel_logs WHERE ${f.where} AND vehicle_id=?`).get(...f.args, v.id).l;
     const revenue = db.prepare(
-      `SELECT COALESCE(SUM(revenue),0) r FROM trips WHERE vehicle_id=? AND status='Completed'`
-    ).get(v.id).r;
+      `SELECT COALESCE(SUM(revenue),0) r FROM trips WHERE ${f.where} AND vehicle_id=? AND status='Completed'`
+    ).get(...f.args, v.id).r;
     const opCost = fuel + maint + misc;
     const eff = fuel_liters ? distance / fuel_liters : 0;
     const roi = v.acquisition_cost > 0
@@ -366,15 +402,25 @@ function markAllNotificationsRead() {
   db.prepare('UPDATE notifications SET read = 1').run();
 }
 
-function listAudit(limit = 100) {
+function listAudit(limit = 100, opts = {}) {
+  // Default to scope=me (least privilege). Programmatic callers can opt into
+  // global by passing opts.scope='all' AND no actorEmail.
+  const scope = opts.scope || (opts.actorEmail ? 'me' : 'all');
+  const email = (opts.actorEmail || '').toLowerCase();
+  if (scope === 'all') {
+    return db.prepare('SELECT * FROM audit_log ORDER BY id DESC LIMIT ?').all(limit);
+  }
   return db.prepare(
-    'SELECT * FROM audit_log ORDER BY id DESC LIMIT ?'
-  ).all(limit);
+    `SELECT a.* FROM audit_log a
+     LEFT JOIN users u ON u.id = a.actor_id
+     WHERE (a.actor_email = ? OR (a.actor_email IS NULL AND u.email = ?))
+     ORDER BY a.id DESC LIMIT ?`
+  ).all(email, email, limit);
 }
 
 // ============================== PREDICTIVE MAINTENANCE ============================== //
-function predictiveMaintenance() {
-  const metrics = vehicleMetrics();
+function predictiveMaintenance(viewerEmail) {
+  const metrics = vehicleMetrics(viewerEmail);
   const out = [];
   for (const m of metrics) {
     const v = getVehicle(m.id);
@@ -431,16 +477,18 @@ function predictiveMaintenance() {
 }
 
 // ============================== DRIVER LEADERBOARD ============================== //
-function driverLeaderboard() {
-  const drivers = db.prepare('SELECT * FROM drivers').all();
+function driverLeaderboard(viewerEmail) {
+  const f = demoFilter(viewerEmail, 'd');
+  const tripsF = demoFilter(viewerEmail, 't');
+  const drivers = db.prepare(`SELECT * FROM drivers d WHERE ${f.where}`).all(...f.args);
   return drivers.map((d) => {
     const trips = db.prepare(
-      "SELECT COUNT(*) c FROM trips WHERE driver_id=? AND status='Completed'"
-    ).get(d.id).c;
+      `SELECT COUNT(*) c FROM trips t WHERE driver_id=? AND status='Completed' AND ${tripsF.where}`
+    ).get(d.id, ...tripsF.args).c;
     const distance = db.prepare(
       `SELECT COALESCE(SUM(end_odometer-start_odometer),0) d
-       FROM trips WHERE driver_id=? AND status='Completed'`
-    ).get(d.id).d;
+       FROM trips t WHERE driver_id=? AND status='Completed' AND ${tripsF.where}`
+    ).get(d.id, ...tripsF.args).d;
     // badge by safety score
     let badge = '🥉';
     if (d.safety_score >= 90) badge = '🥇';

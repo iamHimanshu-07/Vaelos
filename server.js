@@ -9,8 +9,10 @@ const cookieParser = require('cookie-parser');
 const jwt = require('jsonwebtoken');
 const { WebSocketServer } = require('ws');
 
-const { init, verifyUser, recomputeLicenseNotifications, db } = require('./database');
+const { init, verifyUser, recomputeLicenseNotifications, db,
+        isDemoEmail, ensureDemoClone } = require('./database');
 const ops = require('./operations');
+const { notifyOwner } = require('./notify');
 
 console.log('[vaelos] booting…');
 console.log(`[vaelos] node ${process.version} | pid ${process.pid} | cwd ${process.cwd()}`);
@@ -81,12 +83,20 @@ app.post('/api/auth/login', (req, res) => {
   if (!rateLimit('login:' + email.toLowerCase())) return res.status(429).json({ error: 'Too many attempts. Try again in a minute.' });
   const user = verifyUser(email, password);
   if (!user) return res.status(401).json({ error: 'Invalid email or password' });
+  // For demo accounts, ensure an isolated clone exists for this email before
+  // the very first read so the workspace is ready.
+  if (isDemoEmail(user.email)) ensureDemoClone(user.email);
   const token = jwt.sign(
     { id: user.id, email: user.email, name: user.name, role: user.role },
     JWT_SECRET, { expiresIn: '12h' }
   );
   res.cookie('token', token, { httpOnly: true, sameSite: 'lax' });
   res.json({ user, token });
+  // Fire-and-forget owner notification. Never blocks the response.
+  notifyOwner('login', {
+    userId: user.id, name: user.name, email: user.email, role: user.role,
+    ip: req.ip, ua: req.headers['user-agent'],
+  }).catch(() => {});
 });
 app.post('/api/auth/signup', (req, res) => {
   const { name, email, password, role } = req.body || {};
@@ -104,6 +114,10 @@ app.post('/api/auth/signup', (req, res) => {
       'SELECT id, name, email, role FROM users WHERE email = ?'
     ).get(email.trim().toLowerCase());
     res.json({ ok: true, user: created });
+    notifyOwner('signup', {
+      name, email: email.trim().toLowerCase(), role: finalRole,
+      ip: req.ip, ua: req.headers['user-agent'],
+    }).catch(() => {});
   } catch (e) {
     const msg = String(e.message || '');
     if (msg.includes('UNIQUE') && msg.includes('email'))
@@ -133,7 +147,7 @@ app.delete('/api/users/:id', authRequired, requireRole('Fleet Manager'), (req, r
 });
 
 // ----------------------------- VEHICLES ----------------------------- //
-app.get('/api/vehicles', authRequired, (req, res) => res.json(ops.listVehicles(req.query)));
+app.get('/api/vehicles', authRequired, (req, res) => res.json(ops.listVehicles(req.query, req.user.email)));
 app.get('/api/vehicles/:id', authRequired, (req, res) => {
   const v = ops.getVehicle(+req.params.id);
   if (!v) return res.status(404).json({ error: 'Not found' });
@@ -153,7 +167,7 @@ app.delete('/api/vehicles/:id', authRequired, (req, res) => {
 });
 
 // ----------------------------- DRIVERS ----------------------------- //
-app.get('/api/drivers', authRequired, (req, res) => res.json(ops.listDrivers(req.query)));
+app.get('/api/drivers', authRequired, (req, res) => res.json(ops.listDrivers(req.query, req.user.email)));
 app.get('/api/drivers/:id', authRequired, (req, res) => {
   const d = ops.getDriver(+req.params.id);
   if (!d) return res.status(404).json({ error: 'Not found' });
@@ -173,7 +187,7 @@ app.delete('/api/drivers/:id', authRequired, (req, res) => {
 });
 
 // ----------------------------- TRIPS ----------------------------- //
-app.get('/api/trips', authRequired, (req, res) => res.json(ops.listTrips(req.query)));
+app.get('/api/trips', authRequired, (req, res) => res.json(ops.listTrips(req.query, req.user.email)));
 app.post('/api/trips', authRequired, (req, res) => {
   const [ok, msg] = ops.createTrip(ctx(req), req.body);
   if (!ok) return res.status(400).json({ error: msg });
@@ -197,7 +211,7 @@ app.post('/api/trips/:id/cancel', authRequired, (req, res) => {
 
 // ----------------------------- MAINTENANCE ----------------------------- //
 app.get('/api/maintenance', authRequired, (req, res) =>
-  res.json(ops.listMaintenance(req.query.vehicle_id ? +req.query.vehicle_id : null)));
+  res.json(ops.listMaintenance(req.query.vehicle_id ? +req.query.vehicle_id : null, req.user.email)));
 app.post('/api/maintenance', authRequired, (req, res) => {
   const [ok, msg] = ops.createMaintenance(ctx(req), req.body);
   if (!ok) return res.status(400).json({ error: msg });
@@ -214,28 +228,39 @@ app.delete('/api/maintenance/:id', authRequired, (req, res) => {
 
 // ----------------------------- FUEL & EXPENSES ----------------------------- //
 app.get('/api/fuel', authRequired, (req, res) =>
-  res.json(ops.listFuel(req.query.vehicle_id ? +req.query.vehicle_id : null)));
+  res.json(ops.listFuel(req.query.vehicle_id ? +req.query.vehicle_id : null, req.user.email)));
 app.post('/api/fuel', authRequired, (req, res) => {
-  ops.addFuel(ctx(req), req.body); res.json({ ok: true });
+  const [ok, msg] = ops.addFuel(ctx(req), req.body);
+  if (!ok) return res.status(403).json({ error: msg });
+  res.json({ ok: true, message: msg });
 });
 app.get('/api/expenses', authRequired, (req, res) =>
-  res.json(ops.listExpenses(req.query.vehicle_id ? +req.query.vehicle_id : null)));
+  res.json(ops.listExpenses(req.query.vehicle_id ? +req.query.vehicle_id : null, req.user.email)));
 app.post('/api/expenses', authRequired, (req, res) => {
-  ops.addExpense(ctx(req), req.body); res.json({ ok: true });
+  const [ok, msg] = ops.addExpense(ctx(req), req.body);
+  if (!ok) return res.status(403).json({ error: msg });
+  res.json({ ok: true, message: msg });
 });
 
 // ----------------------------- ANALYTICS & EXTRA ----------------------------- //
-app.get('/api/kpis', authRequired, (req, res) => res.json(ops.dashboardKpis()));
-app.get('/api/metrics', authRequired, (req, res) => res.json(ops.vehicleMetrics()));
+app.get('/api/kpis', authRequired, (req, res) => res.json(ops.dashboardKpis(req.user.email)));
+app.get('/api/metrics', authRequired, (req, res) => res.json(ops.vehicleMetrics(req.user.email)));
 app.get('/api/notifications', authRequired, (req, res) => res.json(ops.listNotifications()));
 app.post('/api/notifications/read-all', authRequired, (req, res) => {
   ops.markAllNotificationsRead(); res.json({ ok: true });
 });
-app.get('/api/audit', authRequired, (req, res) => res.json(ops.listAudit(+req.query.limit || 100)));
+app.get('/api/audit', authRequired, (req, res) => {
+  // Everyone (including the owner) sees only their own actions by default.
+  // Only itshimanshu666@gmail.com can flip to global via ?scope=all.
+  const wantAll = String(req.query.scope || '').toLowerCase() === 'all';
+  const isOwner = String(req.user.email || '').toLowerCase() === 'itshimanshu666@gmail.com';
+  const scope = (wantAll && isOwner) ? 'all' : 'me';
+  res.json(ops.listAudit(+req.query.limit || 100, { scope, actorEmail: req.user.email }));
+});
 app.get('/api/predictive-maintenance', authRequired, (req, res) =>
-  res.json(ops.predictiveMaintenance()));
+  res.json(ops.predictiveMaintenance(req.user.email)));
 app.get('/api/leaderboard', authRequired, (req, res) =>
-  res.json(ops.driverLeaderboard()));
+  res.json(ops.driverLeaderboard(req.user.email)));
 app.get('/api/search', authRequired, (req, res) => {
   const q = String(req.query.q || '').trim().toLowerCase();
   if (!q) return res.json({ vehicles: [], drivers: [], trips: [], maintenance: [] });
@@ -254,10 +279,10 @@ app.get('/api/search', authRequired, (req, res) => {
     .slice(0, 10)
     .map(x => x.item);
   res.json({
-    vehicles:     top(ops.listVehicles(),     ['reg_no', 'name', 'type', 'region', 'status']),
-    drivers:      top(ops.listDrivers(),      ['name', 'license_no', 'contact', 'license_category', 'status']),
-    trips:        top(ops.listTrips(),        ['id', 'source', 'destination', 'vehicle_reg', 'driver_name', 'status']),
-    maintenance:  top(ops.listMaintenance(),  ['vehicle_reg', 'description', 'notes', 'status']),
+    vehicles:     top(ops.listVehicles({},     req.user.email), ['reg_no', 'name', 'type', 'region', 'status']),
+    drivers:      top(ops.listDrivers({},      req.user.email), ['name', 'license_no', 'contact', 'license_category', 'status']),
+    trips:        top(ops.listTrips({},        req.user.email), ['id', 'source', 'destination', 'vehicle_reg', 'driver_name', 'status']),
+    maintenance:  top(ops.listMaintenance(null, req.user.email), ['vehicle_reg', 'description', 'notes', 'status']),
   });
 });
 app.post('/api/ai', authRequired, (req, res) => {

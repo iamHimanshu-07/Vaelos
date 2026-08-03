@@ -167,17 +167,148 @@ function init() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       actor_id INTEGER,
       actor_name TEXT,
+      actor_email TEXT,
       entity TEXT NOT NULL,
       entity_id INTEGER,
       action TEXT NOT NULL,
       message TEXT,
       created_at TEXT NOT NULL
     );
+
+    -- Demo isolation: each demo login gets its own starter-fleet clone.
+    -- Rows in vehicles/drivers/trips/fuel_logs/expenses/maintenance carry
+    -- _demo_owner = NULL for real data, or the demo user's email when the
+    -- row belongs to that user's ephemeral workspace.
+    CREATE TABLE IF NOT EXISTS demo_sessions (
+      email TEXT PRIMARY KEY,
+      scope TEXT NOT NULL CHECK (scope IN ('admin','driver','safety','finance')),
+      created_at TEXT NOT NULL
+    );
   `);
+
+  // Idempotent column adds for older DBs.
+  for (const stmt of [
+    "ALTER TABLE audit_log ADD COLUMN actor_email TEXT",
+    "ALTER TABLE vehicles ADD COLUMN _demo_owner TEXT",
+    "ALTER TABLE drivers ADD COLUMN _demo_owner TEXT",
+    "ALTER TABLE trips ADD COLUMN _demo_owner TEXT",
+    "ALTER TABLE fuel_logs ADD COLUMN _demo_owner TEXT",
+    "ALTER TABLE expenses ADD COLUMN _demo_owner TEXT",
+    "ALTER TABLE maintenance ADD COLUMN _demo_owner TEXT",
+    "ALTER TABLE users ADD COLUMN driver_id INTEGER",
+  ]) {
+    try { db.exec(stmt); } catch (_) { /* column already exists */ }
+  }
 
   const userCount = db.prepare('SELECT COUNT(*) c FROM users').get().c;
   if (userCount === 0) seed();
+  // Wire alex@vaelos.com → seeded driver Alex Kumar so the Driver role
+  // demo can actually log fuel/expenses against their assigned vehicle.
+  linkDriverAccounts();
   recomputeLicenseNotifications();
+}
+
+// ============================== DEMO ISOLATION ============================== //
+// Demo accounts (admin, alex, sarah, felix) live in a shared DB but each
+// visitor who logs in with one of them gets their own ephemeral clone of
+// the starter fleet. Real signups see the canonical (non-demo) data.
+const DEMO_EMAILS = new Set([
+  'admin@vaelos.com',
+  'alex@vaelos.com',
+  'sarah@vaelos.com',
+  'felix@vaelos.com',
+]);
+const DEMO_SCOPE = {
+  'admin@vaelos.com':   'admin',
+  'alex@vaelos.com':    'driver',
+  'sarah@vaelos.com':   'safety',
+  'felix@vaelos.com':   'finance',
+};
+function isDemoEmail(email) {
+  return email && DEMO_EMAILS.has(String(email).toLowerCase());
+}
+function ensureDemoClone(email) {
+  const e = String(email || '').toLowerCase();
+  if (!isDemoEmail(e)) return;
+  const existing = db.prepare('SELECT email FROM demo_sessions WHERE email=?').get(e);
+  if (existing) return; // already cloned for this email
+  const now = new Date().toISOString().slice(0, 19);
+  const scope = DEMO_SCOPE[e];
+  db.prepare('INSERT INTO demo_sessions (email, scope, created_at) VALUES (?,?,?)')
+    .run(e, scope, now);
+
+  // Clone the seed rows (those with _demo_owner IS NULL) so each demo email
+  // sees its own copy. Idempotent: only rows where _demo_owner IS NULL
+  // are duplicated; subsequent clones are skipped.
+  const clone = (table, idCol, rowMapper) => {
+    const rows = db.prepare(`SELECT * FROM ${table} WHERE _demo_owner IS NULL`).all();
+    for (const r of rows) {
+      const mapped = rowMapper(r);
+      db.prepare(
+        `INSERT INTO ${table} (_demo_owner, ${Object.keys(mapped).join(',')})` +
+        ` VALUES (?, ${Object.keys(mapped).map(() => '?').join(',')})`
+      ).run(e, ...Object.values(mapped));
+    }
+  };
+
+  clone('vehicles', 'id', (v) => ({
+    reg_no: v.reg_no, name: v.name, type: v.type,
+    max_load_kg: v.max_load_kg, odometer_km: v.odometer_km,
+    acquisition_cost: v.acquisition_cost, region: v.region,
+    status: v.status, created_at: v.created_at,
+  }));
+  clone('drivers', 'id', (d) => ({
+    name: d.name, license_no: d.license_no, license_category: d.license_category,
+    license_expiry: d.license_expiry, contact: d.contact,
+    safety_score: d.safety_score, status: d.status, created_at: d.created_at,
+  }));
+  clone('maintenance', 'id', (m) => ({
+    vehicle_id: m.vehicle_id, description: m.description, cost: m.cost,
+    start_date: m.start_date, end_date: m.end_date, status: m.status,
+    notes: m.notes, created_at: m.created_at,
+  }));
+  clone('trips', 'id', (t) => ({
+    source: t.source, destination: t.destination, vehicle_id: t.vehicle_id,
+    driver_id: t.driver_id, cargo_kg: t.cargo_kg,
+    planned_distance_km: t.planned_distance_km, status: t.status,
+    start_odometer: t.start_odometer, end_odometer: t.end_odometer,
+    fuel_used_liters: t.fuel_used_liters, revenue: t.revenue,
+    dispatched_at: t.dispatched_at, completed_at: t.completed_at,
+    created_at: t.created_at,
+  }));
+  clone('fuel_logs', 'id', (f) => ({
+    vehicle_id: f.vehicle_id, trip_id: f.trip_id, liters: f.liters,
+    cost: f.cost, log_date: f.log_date, odometer_km: f.odometer_km,
+    created_at: f.created_at,
+  }));
+  clone('expenses', 'id', (x) => ({
+    vehicle_id: x.vehicle_id, trip_id: x.trip_id, category: x.category,
+    description: x.description, amount: x.amount, expense_date: x.expense_date,
+    created_at: x.created_at,
+  }));
+}
+
+function linkDriverAccounts() {
+  // Map alex@vaelos.com → seeded driver Alex Kumar so the demo Driver
+  // account can post fuel/expenses against their assigned vehicle.
+  const driver = db.prepare("SELECT id FROM drivers WHERE license_no='DL-042018'").get();
+  if (driver) {
+    db.prepare("UPDATE users SET driver_id = ? WHERE email = 'alex@vaelos.com'")
+      .run(driver.id);
+  }
+}
+
+// demoFilter(email, alias='_demo_owner'):
+// Returns { where, args } where the filter is fully qualified so it works in
+// JOINs where multiple tables carry the column. Pass the primary table's
+// alias so the prefix is correct; default '_demo_owner' resolves on
+// single-table queries.
+function demoFilter(email, alias) {
+  const col = alias ? `${alias}._demo_owner` : '_demo_owner';
+  if (isDemoEmail(email)) {
+    return { where: `${col} = ?`, args: [String(email).toLowerCase()] };
+  }
+  return { where: `${col} IS NULL`, args: [] };
 }
 
 function seed() {
@@ -302,10 +433,14 @@ function verifyUser(email, password) {
 
 function writeAudit(actor, entity, entity_id, action, message) {
   db.prepare(
-    `INSERT INTO audit_log (actor_id,actor_name,entity,entity_id,action,message,created_at)
-     VALUES (?,?,?,?,?,?,?)`
-  ).run(actor?.id || null, actor?.name || 'system', entity, entity_id || null,
+    `INSERT INTO audit_log (actor_id,actor_name,actor_email,entity,entity_id,action,message,created_at)
+     VALUES (?,?,?,?,?,?,?,?)`
+  ).run(actor?.id || null, actor?.name || 'system', actor?.email || null,
+        entity, entity_id || null,
         action, message || '', new Date().toISOString().slice(0, 19));
 }
 
-module.exports = { db, init, verifyUser, recomputeLicenseNotifications, writeAudit };
+module.exports = {
+  db, init, verifyUser, recomputeLicenseNotifications, writeAudit,
+  isDemoEmail, ensureDemoClone, demoFilter, DEMO_EMAILS, linkDriverAccounts,
+};

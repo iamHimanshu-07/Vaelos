@@ -234,18 +234,77 @@ body {
 .auth-switch {
   text-align: center; margin-top: 1.2rem; font-size: .85rem; color: var(--text-soft);
 }
-.demo { margin-top: 1rem; }
-.demo summary { cursor: pointer; color: var(--primary); font-size: .85rem; font-weight: 500; }
-.demo ul { list-style: none; padding: 0; margin: .6rem 0 0; display: flex; flex-direction: column; gap: .35rem; }
-.demo ul li button {
-  display: block; width: 100%; text-align: left;
-  background: var(--bg); border: 1px solid var(--border);
-  border-radius: 8px; padding: .5rem .7rem; cursor: pointer;
-  font-size: .8rem; line-height: 1.35;
-  color: var(--text); transition: background .15s var(--ease), border-color .15s var(--ease);
+/* Signup-first CTA: emphasised so "Create account" dominates on first impression. */
+.auth-switch.signup-cta {
+  margin-top: 1.4rem;
+  padding: .9rem 1rem;
+  background: linear-gradient(135deg, var(--primary-soft) 0%, rgba(99,102,241,0.06) 100%);
+  border: 1px solid var(--primary);
+  border-radius: 12px;
+  font-size: .95rem;
+  color: var(--text);
 }
-.demo ul li button:hover { background: var(--primary-soft); border-color: var(--primary); }
+.auth-switch.signup-cta .auth-link b { color: var(--primary); }
+.auth-switch.signup-cta .auth-link:hover { text-decoration: none; }
+
+/* Demo block: collapsible, demoted, discoverable but never in the way. */
+.demo { margin-top: 1.2rem; }
+.demo summary {
+  cursor: pointer; color: var(--text-soft); font-size: .82rem;
+  font-weight: 500; text-align: center; padding: .25rem 0;
+}
+.demo summary:hover { color: var(--primary); }
+.demo-line { margin-top: .6rem; }
+.demo-grid {
+  display: grid; grid-template-columns: 1fr 1fr 1fr; gap: .5rem;
+  margin-top: .6rem;
+}
+@media (max-width: 540px) { .demo-grid { grid-template-columns: 1fr; } }
+.demo-btn {
+  display: flex; flex-direction: column; gap: .2rem; align-items: flex-start;
+  width: 100%; text-align: left;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 10px; padding: .55rem .7rem; cursor: pointer;
+  font-size: .8rem; line-height: 1.3; color: var(--text);
+  transition: background .15s var(--ease), border-color .15s var(--ease), transform .15s var(--ease);
+}
+.demo-btn:hover { background: var(--primary-soft); border-color: var(--primary); transform: translateY(-1px); }
+.demo-btn.primary {
+  background: linear-gradient(135deg, var(--primary) 0%, #4f46e5 100%);
+  color: #fff; border-color: transparent;
+}
+.demo-btn.primary:hover { background: linear-gradient(135deg, #4f46e5 0%, var(--primary) 100%); }
+.demo-btn.primary .demo-creds { color: rgba(255,255,255,0.85); }
+.demo-role { font-weight: 600; }
+.demo-creds { color: var(--text-soft); font-family: var(--mono, ui-monospace, "SF Mono", monospace); font-size: .72rem; }
+.demo-hint { font-size: .75rem; color: var(--text-soft); margin-top: .7rem; text-align: center; line-height: 1.4; }
 .error { color: var(--danger); margin-top: .5rem; min-height: 1.2rem; font-size: .9rem; }
+
+/* Audit log scope toggle (owner-only) */
+.scope-toggle {
+  display: inline-flex;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px;
+  gap: 2px;
+}
+.scope-btn {
+  background: transparent;
+  border: none;
+  padding: .35rem .8rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: .82rem;
+  color: var(--text-soft);
+  transition: background .15s var(--ease, ease), color .15s var(--ease, ease);
+}
+.scope-btn:hover { color: var(--text); }
+.scope-btn.on {
+  background: var(--primary);
+  color: #fff;
+  font-weight: 600;
+}
 
 @media (max-width: 880px) {
   .auth-shell { grid-template-columns: 1fr; max-width: 460px; }
