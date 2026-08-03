@@ -184,6 +184,8 @@ function connectWS() {
 }
 
 // =================== Navigation =================== //
+// `hideInNav: true` entries are still reachable (e.g. via floating AI bubble)
+// but don't appear in the sidebar list.
 const NAV_ITEMS = [
   { id: 'dashboard',     label: '📊 Dashboard',       roles: ['*'] },
   { id: 'map',           label: '🗺️ Live Map',         roles: ['*'] },
@@ -196,17 +198,22 @@ const NAV_ITEMS = [
   { id: 'fuel',          label: '⛽ Fuel & Expenses', roles: ['*'] },
   { id: 'reports',       label: '📈 Reports',         roles: ['*'] },
   { id: 'audit',         label: '📋 Audit Log',       roles: ['Fleet Manager','Safety Officer'] },
-  { id: 'ai',            label: '🤖 AI Assistant',    roles: ['*'] },
   { id: 'users',         label: '👥 Users',           roles: ['Fleet Manager'] },
+  { id: 'ai',            label: '🤖 AI Assistant',    roles: ['*'], hideInNav: true },
 ];
 
 function buildNav() {
   const nav = $('#nav'); nav.innerHTML = '';
   for (const item of NAV_ITEMS) {
+    if (item.hideInNav) continue;
     if (!item.roles.includes('*') && !item.roles.includes(state.user.role)) continue;
     const btn = document.createElement('button');
-    btn.textContent = item.label;
     btn.dataset.page = item.id;
+    if (item.badge === 'notif') {
+      btn.innerHTML = `<span class="nav-label">${escapeHtml(item.label)}</span><span id="nav-notif-badge" class="nav-badge hidden">0</span>`;
+    } else {
+      btn.textContent = item.label;
+    }
     if (state.page === item.id) btn.classList.add('active');
     btn.addEventListener('click', () => navigate(item.id));
     nav.appendChild(btn);
@@ -272,12 +279,12 @@ async function updateNotifBadge() {
   try {
     const list = await api('/notifications');
     const unread = list.filter(n => !n.read).length;
-    const badge = $('#notif-count');
-    badge.textContent = unread;
+    const badge = $('#nav-notif-badge');
+    if (!badge) return;
+    badge.textContent = unread > 99 ? '99+' : unread;
     badge.classList.toggle('hidden', unread === 0);
   } catch {}
 }
-$('#notif-bell').addEventListener('click', () => navigate('notifications'));
 
 // =================== Dashboard =================== //
 async function renderDashboard(c) {
@@ -404,6 +411,84 @@ function drawDonut(vehicles) {
 }
 
 // =================== MAP (Leaflet) =================== //
+// Region → coordinates (for vehicles without GPS data). All within the
+// Indian subcontinent so vehicles always render on land.
+const REGION_COORDS = {
+  'Central': [20.5937, 78.9629],   // India centroid
+  'North':   [28.7041, 77.1025],   // Delhi
+  'South':   [12.9716, 77.5946],   // Bengaluru
+  'West':    [19.0760, 72.8777],   // Mumbai
+  'East':    [22.5726, 88.3639],   // Kolkata
+};
+// City substring → coordinates. Order matters: longest first.
+const CITY_COORDS = [
+  ['mumbai',     [19.0760, 72.8777]],
+  ['pune',       [18.5204, 73.8567]],
+  ['delhi',      [28.7041, 77.1025]],
+  ['new delhi',  [28.6139, 77.2090]],
+  ['bengaluru',  [12.9716, 77.5946]],
+  ['bangalore',  [12.9716, 77.5946]],
+  ['chennai',    [13.0827, 80.2707]],
+  ['hyderabad',  [17.3850, 78.4867]],
+  ['kolkata',    [22.5726, 88.3639]],
+  ['ahmedabad',  [23.0225, 72.5714]],
+  ['jaipur',     [26.9124, 75.7873]],
+  ['lucknow',    [26.8467, 80.9462]],
+  ['surat',      [21.1702, 72.8311]],
+  ['kanpur',     [26.4499, 80.3319]],
+  ['nagpur',     [21.1458, 79.0882]],
+  ['indore',     [22.7196, 75.8577]],
+  ['thane',      [19.2183, 72.9781]],
+  ['bhopal',     [23.2599, 77.4126]],
+  ['visakhapatnam', [17.6868, 83.2185]],
+  ['vizag',      [17.6868, 83.2185]],
+  ['patna',      [25.5941, 85.1376]],
+  ['vadodara',   [22.3072, 73.1812]],
+  ['ghaziabad',  [28.6692, 77.4538]],
+  ['ludhiana',   [30.9010, 75.8573]],
+  ['agra',       [27.1767, 78.0081]],
+  ['nashik',     [19.9975, 73.7898]],
+  ['faridabad',  [28.4089, 77.3178]],
+  ['meerut',     [28.9845, 77.7064]],
+  ['rajkot',     [22.3039, 70.8022]],
+  ['varanasi',   [25.3176, 82.9739]],
+  ['srinagar',   [34.0837, 74.7973]],
+  ['aurangabad', [19.8762, 75.3433]],
+  ['dhanbad',    [23.7957, 86.4304]],
+  ['amritsar',   [31.6340, 74.8723]],
+  ['allahabad',  [25.4358, 81.8463]],
+  ['prayagraj',  [25.4358, 81.8463]],
+  ['ranchi',     [23.3441, 85.3096]],
+  ['coimbatore', [11.0168, 76.9558]],
+  ['kochi',      [9.9312, 76.2673]],
+  ['cochin',     [9.9312, 76.2673]],
+  ['mysuru',     [12.2958, 76.6394]],
+  ['mysore',     [12.2958, 76.6394]],
+  ['goa',        [15.2993, 74.1240]],
+  ['trivandrum', [8.5241, 76.9366]],
+  ['thiruvananthapuram', [8.5241, 76.9366]],
+  ['guwahati',   [26.1445, 91.7362]],
+  ['bhubaneswar',[20.2961, 85.8245]],
+  ['chandigarh', [30.7333, 76.7794]],
+  ['dehradun',   [30.3165, 78.0322]],
+  ['shimla',     [31.1048, 77.1734]],
+];
+function coordsForPlace(text, fallbackRegion) {
+  const s = String(text || '').toLowerCase();
+  for (const [name, xy] of CITY_COORDS) {
+    if (s.includes(name)) return xy;
+  }
+  return REGION_COORDS[fallbackRegion] || REGION_COORDS['Central'];
+}
+// Per-vehicle jitter so multiple vehicles in the same region don't stack
+// at the exact same lat/lng (kept inside a ~50 km radius).
+function jitter(xy, seed) {
+  let h = 0; for (let i = 0; i < seed.length; i++) h = ((h << 5) - h) + seed.charCodeAt(i);
+  const dLat = ((h & 0xff) - 128) / 256 * 0.45;   // ±~25 km
+  const dLng = (((h >> 8) & 0xff) - 128) / 256 * 0.45;
+  return [xy[0] + dLat, xy[1] + dLng];
+}
+
 async function renderMap(c) {
   c.innerHTML = `
     <div class="card">
@@ -412,48 +497,62 @@ async function renderMap(c) {
         <div class="text-soft">Click markers for vehicle info · Routes shown for dispatched trips</div>
       </div>
       <div id="map"></div>
+      <div class="map-legend">
+        <span class="legend-item"><span class="legend-dot van"></span> Van</span>
+        <span class="legend-item"><span class="legend-dot truck"></span> Truck</span>
+        <span class="legend-item"><span class="legend-dot car"></span> Car</span>
+        <span class="legend-item"><span class="legend-dot bus"></span> Bus</span>
+        <span class="legend-item legend-route">━━ Active route</span>
+      </div>
       <div class="text-soft mt-1" style="font-size:.8rem">
-        📍 Markers use simulated positions for demo. Map data © OpenStreetMap contributors.
+        📍 Markers use region/seed positions for demo. Map data © OpenStreetMap contributors.
       </div>
     </div>
   `;
-  // wait for DOM
   await new Promise(r => setTimeout(r, 50));
   if (state.map) { state.map.remove(); state.map = null; }
 
   const vehicles = await api('/vehicles');
   const trips = await api('/trips?status=Dispatched');
 
-  state.map = L.map('map').setView([20.5937, 78.9629], 5);
+  state.map = L.map('map').setView([22.5937, 78.9629], 5);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
     attribution: '© OpenStreetMap'
   }).addTo(state.map);
 
-  // Stable hash → lat/lng so each vehicle has a consistent position
-  function pos(v) {
-    let h = 0; const s = v.reg_no + v.id;
-    for (let i = 0; i < s.length; i++) h = ((h << 5) - h) + s.charCodeAt(i);
-    const lat = 8 + (Math.abs(h) % 2500) / 100;       // 8° to 33° N (India)
-    const lng = 68 + (Math.abs(h * 7) % 3000) / 100;  // 68° to 98° E
-    return [lat, lng];
-  }
-
   const colorOf = (status) => ({
     'Available':'#16a34a','On Trip':'#2563eb','In Shop':'#f59e0b','Retired':'#94a3b8'
   }[status] || '#6366f1');
 
-  const iconFor = (status) => L.divIcon({
-    className: '',
-    html: `<div style="background:${colorOf(status)};width:18px;height:18px;border-radius:50%;border:3px solid white;box-shadow:0 0 0 2px ${colorOf(status)}, 0 2px 6px rgba(0,0,0,.3)"></div>`,
-    iconSize: [18, 18],
-    iconAnchor: [9, 9],
-  });
+  // SVG icons per vehicle type — a colored "logo" so Van/Truck/Car/Bus
+  // are visually distinct on the map.
+  const TYPE_GLYPH = {
+    'Van':   '🚐',
+    'Truck': '🚛',
+    'Car':   '🚗',
+    'Bus':   '🚌',
+  };
+  function iconFor(v) {
+    const color = colorOf(v.status);
+    const glyph = TYPE_GLYPH[v.type] || '🚐';
+    return L.divIcon({
+      className: 'vaelos-marker',
+      html: `
+        <div class="marker-ring" style="--ring:${color}"></div>
+        <div class="marker-body" style="background:${color};--ring:${color}"><span>${glyph}</span></div>
+      `,
+      iconSize: [38, 38],
+      iconAnchor: [19, 19],
+      popupAnchor: [0, -18],
+    });
+  }
 
   state.mapMarkers = [];
   for (const v of vehicles) {
-    const [lat, lng] = pos(v);
-    const m = L.marker([lat, lng], { icon: iconFor(v.status) }).addTo(state.map);
+    const base = coordsForPlace(v.region, v.region);
+    const [lat, lng] = jitter(base, v.reg_no + v.id);
+    const m = L.marker([lat, lng], { icon: iconFor(v) }).addTo(state.map);
     m.bindPopup(`
       <h4>${escapeHtml(v.reg_no)} · ${escapeHtml(v.name)}</h4>
       <div class="pop-line">Type: <b>${escapeHtml(v.type)}</b></div>
@@ -465,15 +564,16 @@ async function renderMap(c) {
     state.mapMarkers.push(m);
   }
 
-  // Draw a route line for the first dispatched trip (Mumbai → Pune)
-  if (trips.length) {
-    const t = trips[0];
+  // Draw route polylines only when both endpoints resolve to a known city.
+  for (const t of trips) {
     const v = vehicles.find(x => x.id === t.vehicle_id);
-    if (v) {
-      const [lat, lng] = pos(v);
-      const route = L.polyline([[19.0760, 72.8777], [18.5204, 73.8567]], { color: '#6366f1', weight: 4, dashArray: '8,8' }).addTo(state.map);
-      route.bindPopup(`<b>Active Trip</b><br>${t.source} → ${t.destination}<br>Vehicle: ${v.reg_no}`);
-    }
+    const src = coordsForPlace(t.source, v?.region);
+    const dst = coordsForPlace(t.destination, v?.region);
+    if (!src || !dst || src === dst) continue;
+    const route = L.polyline([src, dst], {
+      color: '#6366f1', weight: 4, dashArray: '8,8', opacity: .85
+    }).addTo(state.map);
+    route.bindPopup(`<b>Active Trip</b><br>${escapeHtml(t.source)} → ${escapeHtml(t.destination)}${v ? `<br>Vehicle: ${escapeHtml(v.reg_no)}` : ''}`);
   }
 }
 
@@ -1259,7 +1359,7 @@ async function renderUsers(c) {
       <h3>👥 User Management</h3>
       <div class="table-wrap"><table>
         <thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Role</th><th>Created</th><th>Actions</th></tr></thead>
-        <tbody>${users.map(u => `
+        <tbody id="u-list">${users.map(u => `
           <tr>
             <td>${u.id}</td><td>${escapeHtml(u.name)}</td><td>${escapeHtml(u.email)}</td>
             <td>${statusPill(u.role)}</td><td>${escapeHtml(u.created_at)}</td>
@@ -1282,8 +1382,10 @@ async function renderUsers(c) {
   `;
   $('#u-list', c).addEventListener('click', async (e) => {
     if (e.target.dataset.del && confirm('Delete this user?')) {
-      await api(`/users/${e.target.dataset.del}`, { method: 'DELETE' });
-      toast('Deleted'); renderUsers(c);
+      try {
+        await api(`/users/${e.target.dataset.del}`, { method: 'DELETE' });
+        toast('Deleted'); renderUsers(c);
+      } catch (err) { toast(err.message, 'error'); }
     }
   });
   $('#save-u', c).addEventListener('click', async () => {
