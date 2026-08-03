@@ -36,7 +36,16 @@ function listVehicles(filters = {}) {
   if (filters.status && filters.status !== 'All'){q += ' AND status = ?'; args.push(filters.status); }
   if (filters.region && filters.region !== 'All'){q += ' AND region = ?'; args.push(filters.region); }
   q += ' ORDER BY reg_no';
-  return db.prepare(q).all(...args);
+  const vehicles = db.prepare(q).all(...args);
+  // Decorate each vehicle with `current_load_kg`: the cargo carried on a
+  // currently-Dispatched trip, or 0 when the vehicle is idle.
+  const loadByVehicle = db.prepare(
+    `SELECT vehicle_id, COALESCE(SUM(cargo_kg),0) c
+       FROM trips WHERE status='Dispatched' GROUP BY vehicle_id`
+  ).all();
+  const loadMap = Object.fromEntries(loadByVehicle.map(r => [r.vehicle_id, r.c]));
+  for (const v of vehicles) v.current_load_kg = loadMap[v.id] || 0;
+  return vehicles;
 }
 function getVehicle(id) { return db.prepare('SELECT * FROM vehicles WHERE id = ?').get(id); }
 function addVehicle(ctx, { reg_no, name, type, max_load_kg, odometer_km, acquisition_cost, region }) {

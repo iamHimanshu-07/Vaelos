@@ -6,13 +6,14 @@
 const API = '/api';
 const WS_URL = (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws';
 
-// Theme: persisted value, or auto-detect from the OS on first visit.
+// Theme: always start on light theme by default for the whole site.
+// Visitors can still toggle to dark via the top-right icon; their choice
+// is persisted to localStorage. OS preference is no longer consulted on
+// first visit so the brand reads consistently across devices.
 function initialTheme() {
   const stored = localStorage.getItem('vaelos-theme');
   if (stored === 'light' || stored === 'dark') return stored;
-  return window.matchMedia &&
-         window.matchMedia('(prefers-color-scheme: dark)').matches
-         ? 'dark' : 'light';
+  return 'light';
 }
 let state = {
   user: null,
@@ -279,12 +280,13 @@ async function updateNotifBadge() {
   try {
     const list = await api('/notifications');
     const unread = list.filter(n => !n.read).length;
-    const badge = $('#nav-notif-badge');
+    const badge = $('#notif-count');
     if (!badge) return;
     badge.textContent = unread > 99 ? '99+' : unread;
     badge.classList.toggle('hidden', unread === 0);
   } catch {}
 }
+$('#notif-bell').addEventListener('click', () => navigate('notifications'));
 
 // =================== Dashboard =================== //
 async function renderDashboard(c) {
@@ -327,7 +329,7 @@ async function renderDashboard(c) {
       <h3>🚐 Fleet Snapshot</h3>
       <div class="table-wrap"><table id="v-table">
         <thead><tr>
-          <th>Reg</th><th>Name</th><th>Type</th><th>Max Load</th><th>Odometer</th><th>Cost</th><th>Region</th><th>Status</th>
+          <th>Reg</th><th>Name</th><th>Type</th><th>Current Load</th><th>Max Load</th><th>Odometer</th><th>Cost</th><th>Region</th><th>Status</th>
         </tr></thead>
         <tbody></tbody>
       </table></div>
@@ -340,18 +342,30 @@ async function renderDashboard(c) {
   `;
   const tableBody = $('#v-table tbody', c);
   function drawVTable(list) {
-    if (!list.length) { tableBody.innerHTML = `<tr><td colspan="8" class="text-soft">No vehicles match.</td></tr>`; return; }
-    tableBody.innerHTML = list.map(v => `
+    if (!list.length) { tableBody.innerHTML = `<tr><td colspan="9" class="text-soft">No vehicles match.</td></tr>`; return; }
+    tableBody.innerHTML = list.map(v => {
+      const cur = Number(v.current_load_kg || 0);
+      const max = Number(v.max_load_kg || 0);
+      const pct = max > 0 ? Math.min(100, Math.round((cur / max) * 100)) : 0;
+      const loadCls = pct >= 90 ? 'load-bar over' : pct >= 60 ? 'load-bar warn' : 'load-bar ok';
+      return `
       <tr>
         <td><b>${escapeHtml(v.reg_no)}</b></td>
         <td>${escapeHtml(v.name)}</td>
         <td>${escapeHtml(v.type)}</td>
-        <td>${fmtKm(v.max_load_kg)} kg</td>
+        <td>
+          <div class="load-cell">
+            <div class="load-bar ${loadCls}"><div class="load-fill" style="width:${pct}%"></div></div>
+            <div class="load-num"><b>${fmtKm(cur)}</b> / ${fmtKm(max)} kg <span class="text-soft">(${pct}%)</span></div>
+          </div>
+        </td>
+        <td>${fmtKm(max)} kg</td>
         <td>${fmtKm(v.odometer_km)} km</td>
         <td>${fmtINR(v.acquisition_cost)}</td>
         <td>${escapeHtml(v.region)}</td>
         <td>${statusPill(v.status)}</td>
-      </tr>`).join('');
+      </tr>`;
+    }).join('');
   }
   drawVTable(vehicles);
   drawDonut(vehicles);
@@ -481,11 +495,24 @@ function coordsForPlace(text, fallbackRegion) {
   return REGION_COORDS[fallbackRegion] || REGION_COORDS['Central'];
 }
 // Per-vehicle jitter so multiple vehicles in the same region don't stack
-// at the exact same lat/lng (kept inside a ~50 km radius).
-function jitter(xy, seed) {
+// at the exact same lat/lng. Bounds are land-safe per region — coastal
+// cities constrain westward/southward jitter so vehicles never end up
+// in the Arabian Sea or Bay of Bengal.
+const REGION_JITTER = {
+  // [max south, max north, max west, max east] in degrees
+  'Central': [ 0.10, 0.10, 0.10, 0.10],
+  'North':   [ 0.15, 0.15, 0.20, 0.20],
+  'South':   [ 0.12, 0.12, 0.10, 0.15], // Bengaluru: don't drift west into the ghats edge
+  'West':    [ 0.06, 0.10, 0.04, 0.18], // Mumbai: hard cap westward (Arabian Sea)
+  'East':    [ 0.15, 0.15, 0.10, 0.10], // Kolkata: cap eastward slightly (Bangladesh)
+};
+function jitter(xy, seed, region) {
+  const b = REGION_JITTER[region] || [0.1, 0.1, 0.1, 0.1];
   let h = 0; for (let i = 0; i < seed.length; i++) h = ((h << 5) - h) + seed.charCodeAt(i);
-  const dLat = ((h & 0xff) - 128) / 256 * 0.45;   // ±~25 km
-  const dLng = (((h >> 8) & 0xff) - 128) / 256 * 0.45;
+  // Map each hash byte to the [south, north, west, east] range.
+  const south = -b[0], north = b[1], west = -b[2], east = b[3];
+  const dLat = south + ((h         & 0xff) / 255) * (north - south);
+  const dLng = west + (((h >>> 8)  & 0xff) / 255) * (east  - west);
   return [xy[0] + dLat, xy[1] + dLng];
 }
 
@@ -551,13 +578,17 @@ async function renderMap(c) {
   state.mapMarkers = [];
   for (const v of vehicles) {
     const base = coordsForPlace(v.region, v.region);
-    const [lat, lng] = jitter(base, v.reg_no + v.id);
+    const [lat, lng] = jitter(base, v.reg_no + v.id, v.region);
     const m = L.marker([lat, lng], { icon: iconFor(v) }).addTo(state.map);
+    const cur = Number(v.current_load_kg || 0);
+    const max = Number(v.max_load_kg || 0);
+    const pct = max > 0 ? Math.min(100, Math.round((cur / max) * 100)) : 0;
+    const overCap = max > 0 && cur > max;
     m.bindPopup(`
       <h4>${escapeHtml(v.reg_no)} · ${escapeHtml(v.name)}</h4>
       <div class="pop-line">Type: <b>${escapeHtml(v.type)}</b></div>
       <div class="pop-line">Region: ${escapeHtml(v.region)}</div>
-      <div class="pop-line">Max load: ${v.max_load_kg} kg</div>
+      <div class="pop-line">Current load: <b>${fmtKm(cur)}</b> / ${fmtKm(max)} kg (${pct}%)${overCap ? ' <span style="color:#ef4444">⚠ over capacity</span>' : ''}</div>
       <div class="pop-line">Odometer: ${v.odometer_km.toLocaleString('en-IN')} km</div>
       <div class="pop-line">Status: ${statusPill(v.status)}</div>
     `);

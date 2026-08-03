@@ -521,6 +521,35 @@ tbody tr:hover { background: var(--primary-soft); }
 .leaflet-popup-content { font-family: inherit; min-width: 200px; }
 .leaflet-popup-content h4 { margin: 0 0 4px; font-size: 1rem; }
 .leaflet-popup-content .pop-line { font-size: .85rem; color: #475569; margin: 2px 0; }
+
+/* Load cells (Fleet Snapshot) */
+.load-cell { display: flex; flex-direction: column; gap: 4px; min-width: 140px; }
+.load-bar {
+  position: relative;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(15,23,42,.08);
+  overflow: hidden;
+  border: 1px solid rgba(15,23,42,.08);
+}
+[data-theme="dark"] .load-bar {
+  background: rgba(255,255,255,.08);
+  border-color: rgba(255,255,255,.08);
+}
+.load-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width .35s ease;
+  background: linear-gradient(90deg, #6366f1, #06b6d4);
+}
+.load-bar.ok    .load-fill { background: linear-gradient(90deg, #10b981, #34d399); }
+.load-bar.warn  .load-fill { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+.load-bar.over  .load-fill {
+  background: linear-gradient(90deg, #ef4444, #f87171);
+  box-shadow: 0 0 8px rgba(239,68,68,.4);
+}
+.load-num { font-size: .8rem; color: var(--ink, #475569); }
+[data-theme="dark"] .load-num { color: #cbd5e1; }
 .leaflet-popup-content-wrapper { border-radius: var(--radius-sm); box-shadow: var(--shadow-lg); }
 
 .map-legend {

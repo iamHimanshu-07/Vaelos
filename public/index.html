@@ -51,6 +51,7 @@
         <h1 id="page-title">Dashboard</h1>
         <div class="topbar-right">
           <button id="voice-btn" class="bell" title="Voice command">🎙️</button>
+          <button id="notif-bell" class="bell" title="Notifications">🔔 <span id="notif-count" class="badge hidden">0</span></button>
           <button id="theme-icon" class="bell" title="Toggle theme" aria-label="Toggle theme">🌙</button>
           <div class="profile-wrap">
             <button id="profile-btn" class="avatar" title="Profile" aria-label="Open profile menu">
@@ -62,9 +63,6 @@
                 <div class="profile-email text-soft" id="profile-email">—</div>
                 <span class="pill pill-blue" id="profile-role">—</span>
               </div>
-              <button class="profile-item" id="profile-theme" role="menuitem">
-                <span>🌓</span><span class="profile-item-label">Toggle theme</span>
-              </button>
               <button class="profile-item danger" id="profile-logout" role="menuitem">
                 <span>🚪</span><span class="profile-item-label">Sign out</span>
               </button>
