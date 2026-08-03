@@ -49,8 +49,13 @@
     <main class="main">
       <header class="topbar">
         <h1 id="page-title">Dashboard</h1>
+        <div class="search-wrap">
+          <input id="master-search" type="search" placeholder="Search vehicles, drivers, trips, plates… (Ctrl+K)" autocomplete="off" />
+          <kbd class="search-kbd">Ctrl K</kbd>
+          <div id="search-dropdown" class="search-dropdown hidden"></div>
+        </div>
         <div class="topbar-right">
-          <button id="voice-btn" class="bell" title="Voice command">🎙️</button>
+          <button id="voice-btn" class="bell" title="Voice command (Ctrl+Space)">🎙️</button>
           <button id="notif-bell" class="bell" title="Notifications">🔔 <span id="notif-count" class="badge hidden">0</span></button>
           <button id="theme-icon" class="bell" title="Toggle theme" aria-label="Toggle theme">🌙</button>
           <div class="profile-wrap">

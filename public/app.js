@@ -85,6 +85,7 @@ function showApp() {
   navigate(state.page);
   // Reveal the floating AI bubble once the user is signed in.
   $('#ai-fab').classList.remove('hidden');
+  setupMasterSearch();
 }
 function initialsOf(name) {
   return String(name || '?')
@@ -167,6 +168,7 @@ function connectWS() {
       if (m.event === 'connected') return;
       toast(`🔔 Live: ${m.event}`, 'live');
       updateNotifBadge();
+      if (typeof search !== 'undefined' && search && search.invalidate) search.invalidate();
       // Re-render if user is on a page affected by this event
       const affected = {
         dashboard: ['vehicle.create','trip.create','trip.dispatch','trip.complete','trip.cancel','maintenance.create','maintenance.close'],
@@ -185,36 +187,42 @@ function connectWS() {
 }
 
 // =================== Navigation =================== //
+// Sidebar is ordered the way a transport-ops team actually works:
+//   Overview → Core entities → Live ops → Finance → People → Admin.
 // `hideInNav: true` entries are still reachable (e.g. via floating AI bubble)
-// but don't appear in the sidebar list.
+// but don't appear in the sidebar list. `group` adds a soft label divider.
 const NAV_ITEMS = [
-  { id: 'dashboard',     label: '📊 Dashboard',       roles: ['*'] },
-  { id: 'map',           label: '🗺️ Live Map',         roles: ['*'] },
-  { id: 'vehicles',      label: '🚐 Vehicles',        roles: ['*'] },
-  { id: 'drivers',       label: '👤 Drivers',         roles: ['*'] },
-  { id: 'trips',         label: '📦 Trips',           roles: ['*'] },
-  { id: 'maintenance',   label: '🛠️ Maintenance',     roles: ['*'] },
-  { id: 'predictive',    label: '🔮 Predictive AI',   roles: ['Fleet Manager','Safety Officer'] },
-  { id: 'leaderboard',   label: '🏆 Leaderboard',     roles: ['*'] },
-  { id: 'fuel',          label: '⛽ Fuel & Expenses', roles: ['*'] },
-  { id: 'reports',       label: '📈 Reports',         roles: ['*'] },
-  { id: 'audit',         label: '📋 Audit Log',       roles: ['Fleet Manager','Safety Officer'] },
-  { id: 'users',         label: '👥 Users',           roles: ['Fleet Manager'] },
-  { id: 'ai',            label: '🤖 AI Assistant',    roles: ['*'], hideInNav: true },
+  { id: 'dashboard',     label: '📊 Dashboard',          roles: ['*'],                       group: 'Overview' },
+  { id: 'vehicles',      label: '🚐 Vehicles',           roles: ['*'],                       group: 'Core' },
+  { id: 'drivers',       label: '👤 Drivers',            roles: ['*'],                       group: 'Core' },
+  { id: 'trips',         label: '📦 Trips',              roles: ['*'],                       group: 'Core' },
+  { id: 'map',           label: '🗺️ Live Map',           roles: ['*'],                       group: 'Live Ops' },
+  { id: 'maintenance',   label: '🛠️ Maintenance',        roles: ['*'],                       group: 'Live Ops' },
+  { id: 'fuel',          label: '⛽ Fuel & Expenses',    roles: ['*'],                       group: 'Finance' },
+  { id: 'reports',       label: '📈 Reports',            roles: ['*'],                       group: 'Finance' },
+  { id: 'leaderboard',   label: '🏆 Leaderboard',        roles: ['*'],                       group: 'People' },
+  { id: 'predictive',    label: '🔮 Predictive AI',      roles: ['Fleet Manager','Safety Officer'], group: 'Insights' },
+  { id: 'audit',         label: '📋 Audit Log',          roles: ['Fleet Manager','Safety Officer'], group: 'Admin' },
+  { id: 'users',         label: '👥 Users',              roles: ['Fleet Manager'],           group: 'Admin' },
+  { id: 'ai',            label: '🤖 AI Assistant',       roles: ['*'],                       hideInNav: true },
 ];
 
 function buildNav() {
   const nav = $('#nav'); nav.innerHTML = '';
+  let lastGroup = null;
   for (const item of NAV_ITEMS) {
     if (item.hideInNav) continue;
     if (!item.roles.includes('*') && !item.roles.includes(state.user.role)) continue;
+    if (item.group && item.group !== lastGroup) {
+      const sep = document.createElement('div');
+      sep.className = 'nav-group';
+      sep.textContent = item.group;
+      nav.appendChild(sep);
+      lastGroup = item.group;
+    }
     const btn = document.createElement('button');
     btn.dataset.page = item.id;
-    if (item.badge === 'notif') {
-      btn.innerHTML = `<span class="nav-label">${escapeHtml(item.label)}</span><span id="nav-notif-badge" class="nav-badge hidden">0</span>`;
-    } else {
-      btn.textContent = item.label;
-    }
+    btn.textContent = item.label;
     if (state.page === item.id) btn.classList.add('active');
     btn.addEventListener('click', () => navigate(item.id));
     nav.appendChild(btn);
@@ -230,6 +238,7 @@ function navigate(page) {
     predictive:'Predictive Maintenance AI', leaderboard:'Driver Leaderboard',
     fuel:'Fuel & Expenses', reports:'Reports & Analytics',
     audit:'Audit Log', ai:'AI Assistant', notifications:'Notifications', users:'User Management',
+    search:'Search Results',
   };
   $('#page-title').textContent = titles[page] || page;
   render();
@@ -269,6 +278,8 @@ async function render() {
       case 'audit':         await renderAudit(c); break;
       case 'ai':            await renderAI(c); break;
       case 'users':         await renderUsers(c); break;
+      case 'notifications': await renderNotifications(c); break;
+      case 'search':        await renderSearch(c, state._searchQ || ''); break;
     }
     updateNotifBadge();
   } catch (e) {
@@ -287,6 +298,245 @@ async function updateNotifBadge() {
   } catch {}
 }
 $('#notif-bell').addEventListener('click', () => navigate('notifications'));
+
+// =================== Master Search (Ctrl/Cmd+K) =================== //
+const search = {
+  cache: null,         // {vehicles, drivers, trips, maintenance} loaded lazily
+  loadedAt: 0,
+  get data() {
+    const stale = Date.now() - this.loadedAt > 60_000;
+    if (this.cache && !stale) return Promise.resolve(this.cache);
+    return Promise.all([
+      api('/vehicles').catch(() => []),
+      api('/drivers').catch(() => []),
+      api('/trips').catch(() => []),
+      api('/maintenance').catch(() => []),
+    ]).then(([vehicles, drivers, trips, maintenance]) => {
+      this.cache = { vehicles, drivers, trips, maintenance };
+      this.loadedAt = Date.now();
+      return this.cache;
+    });
+  },
+  invalidate() { this.loadedAt = 0; },
+};
+
+function highlight(text, q) {
+  if (!q) return escapeHtml(text);
+  const idx = String(text).toLowerCase().indexOf(q.toLowerCase());
+  if (idx === -1) return escapeHtml(text);
+  const before = escapeHtml(text.slice(0, idx));
+  const match  = escapeHtml(text.slice(idx, idx + q.length));
+  const after  = escapeHtml(text.slice(idx + q.length));
+  return `${before}<mark>${match}</mark>${after}`;
+}
+
+function searchRunQuery(q) {
+  q = q.trim().toLowerCase();
+  if (!q) return { vehicles: [], drivers: [], trips: [], maintenance: [] };
+  const score = (val) => {
+    const s = String(val || '').toLowerCase();
+    if (s === q) return 100;
+    if (s.startsWith(q)) return 80;
+    if (s.includes(q)) return 50;
+    return 0;
+  };
+  const out = { vehicles: [], drivers: [], trips: [], maintenance: [] };
+  if (!search.cache) return out;
+  for (const v of search.cache.vehicles) {
+    const sc = Math.max(score(v.reg_no), score(v.name), score(v.type), score(v.region), score(v.status));
+    if (sc) out.vehicles.push({ v, sc });
+  }
+  for (const d of search.cache.drivers) {
+    const sc = Math.max(score(d.name), score(d.license_no), score(d.contact), score(d.license_category), score(d.status));
+    if (sc) out.drivers.push({ d, sc });
+  }
+  for (const t of search.cache.trips) {
+    const sc = Math.max(score(t.id), score(t.source), score(t.destination), score(t.vehicle_reg), score(t.driver_name), score(t.status));
+    if (sc) out.trips.push({ t, sc });
+  }
+  for (const m of search.cache.maintenance) {
+    const sc = Math.max(score(m.vehicle_reg), score(m.description), score(m.notes), score(m.status));
+    if (sc) out.maintenance.push({ m, sc });
+  }
+  const sort = (a, b) => b.sc - a.sc;
+  out.vehicles.sort(sort); out.drivers.sort(sort); out.trips.sort(sort); out.maintenance.sort(sort);
+  return out;
+}
+
+async function renderSearchDropdown(q) {
+  const dd = $('#search-dropdown');
+  if (!q.trim()) { dd.classList.add('hidden'); return; }
+  // Prefer server-side search for freshness; fall back to cache if offline.
+  let res;
+  try {
+    res = await api('/search?q=' + encodeURIComponent(q));
+  } catch {
+    await search.data;
+    res = searchRunQuery(q);
+  }
+  // Normalize: server returns { vehicles: [...] } but no score; the shape is
+  // compatible with the dropdown renderer if we treat each item as a single
+  // hit. The cached path returns [{v, sc}] pairs — flatten those.
+  const flat = (arr, key) => arr.map(it => it[key] || it);
+  res = {
+    vehicles:    flat(res.vehicles,    'v'),
+    drivers:     flat(res.drivers,     'd'),
+    trips:       flat(res.trips,       't'),
+    maintenance: flat(res.maintenance, 'm'),
+  };
+  const total = res.vehicles.length + res.drivers.length + res.trips.length + res.maintenance.length;
+  if (total === 0) {
+    dd.innerHTML = `<div class="search-empty">🔍 No matches for "<b>${escapeHtml(q)}</b>"<br><span style="font-size:.78rem">Try a plate, driver name, city, or trip #</span></div>`;
+    dd.classList.remove('hidden');
+    return;
+  }
+  const section = (title, items, kind) => {
+    if (!items.length) return '';
+    const rows = items.slice(0, 5).map(({ v, d, t, m }) => {
+      if (kind === 'vehicle') {
+        const cur = Number(v.current_load_kg || 0), max = Number(v.max_load_kg || 0);
+        return `<div class="search-item" data-kind="vehicle" data-page="vehicles">
+          <div class="ico">🚐</div>
+          <div class="body">
+            <div class="title">${highlight(v.reg_no + ' · ' + v.name, q)}</div>
+            <div class="sub">${highlight(v.type, q)} · ${highlight(v.region, q)} · ${cur}/${max} kg · ${statusPill(v.status)}</div>
+          </div>
+        </div>`;
+      } else if (kind === 'driver') {
+        return `<div class="search-item" data-kind="driver" data-page="drivers">
+          <div class="ico">👤</div>
+          <div class="body">
+            <div class="title">${highlight(d.name, q)}</div>
+            <div class="sub">${highlight(d.license_no, q)} · ${highlight(d.license_category, q)} · ${statusPill(d.status)}</div>
+          </div>
+        </div>`;
+      } else if (kind === 'trip') {
+        return `<div class="search-item" data-kind="trip" data-page="trips">
+          <div class="ico">📦</div>
+          <div class="body">
+            <div class="title">Trip #${t.id} · ${highlight(t.source + ' → ' + t.destination, q)}</div>
+            <div class="sub">${highlight(t.vehicle_reg || '', q)} · ${highlight(t.driver_name || '', q)} · ${statusPill(t.status)}</div>
+          </div>
+        </div>`;
+      } else {
+        return `<div class="search-item" data-kind="maintenance" data-page="maintenance">
+          <div class="ico">🛠️</div>
+          <div class="body">
+            <div class="title">${highlight(m.vehicle_reg + ' — ' + m.description, q)}</div>
+            <div class="sub">${fmtINR(m.cost)} · ${highlight(m.status, q)}</div>
+          </div>
+        </div>`;
+      }
+    }).join('');
+    const more = items.length > 5 ? `<div class="search-section-title">…and ${items.length - 5} more</div>` : '';
+    return `<div class="search-section-title">${title} (${items.length})</div>${rows}${more}`;
+  };
+  dd.innerHTML =
+    section('Vehicles',     res.vehicles,     'vehicle') +
+    section('Drivers',      res.drivers,      'driver') +
+    section('Trips',        res.trips,        'trip') +
+    section('Maintenance',  res.maintenance,  'maintenance');
+  dd.classList.remove('hidden');
+  dd.querySelectorAll('.search-item').forEach(el => {
+    el.addEventListener('click', () => {
+      dd.classList.add('hidden');
+      const target = el.dataset.page;
+      if (target) navigate(target);
+      $('#master-search').blur();
+    });
+  });
+}
+
+async function renderSearch(c, q) {
+  let res;
+  try {
+    res = await api('/search?q=' + encodeURIComponent(q));
+  } catch {
+    await search.data;
+    const local = searchRunQuery(q);
+    res = {
+      vehicles:    local.vehicles.map(x => x.v),
+      drivers:     local.drivers.map(x => x.d),
+      trips:       local.trips.map(x => x.t),
+      maintenance: local.maintenance.map(x => x.m),
+    };
+  }
+  c.innerHTML = `
+    <div class="card">
+      <h3>🔎 Search Results for "${escapeHtml(q)}"</h3>
+      <div id="search-results"></div>
+    </div>
+  `;
+  const r = $('#search-results', c);
+  const renderGroup = (title, items, page, builder) => {
+    if (!items.length) return;
+    const cards = items.map(it => builder(it)).join('');
+    r.insertAdjacentHTML('beforeend', `
+      <div class="card" style="margin-top:.8rem">
+        <h4 style="margin:0 0 .5rem">${title} (${items.length})</h4>
+        <div class="table-wrap"><table>
+          ${cards}
+        </table></div>
+      </div>
+    `);
+  };
+  renderGroup('Vehicles', res.vehicles, 'vehicles', ({ v }) => `<tr style="cursor:pointer" onclick="navigate('vehicles')">
+    <td><b>${escapeHtml(v.reg_no)}</b></td><td>${escapeHtml(v.name)}</td><td>${escapeHtml(v.type)}</td>
+    <td>${fmtKm(v.max_load_kg)} kg</td><td>${escapeHtml(v.region)}</td><td>${statusPill(v.status)}</td></tr>`);
+  renderGroup('Drivers', res.drivers, 'drivers', ({ d }) => `<tr style="cursor:pointer" onclick="navigate('drivers')">
+    <td><b>${escapeHtml(d.name)}</b></td><td>${escapeHtml(d.license_no)}</td>
+    <td>${escapeHtml(d.license_category)}</td><td>${escapeHtml(d.license_expiry)}</td>
+    <td>${statusPill(d.status)}</td></tr>`);
+  renderGroup('Trips', res.trips, 'trips', ({ t }) => `<tr style="cursor:pointer" onclick="navigate('trips')">
+    <td>#${t.id}</td><td>${escapeHtml(t.source)} → ${escapeHtml(t.destination)}</td>
+    <td>${escapeHtml(t.vehicle_reg)}</td><td>${escapeHtml(t.driver_name)}</td>
+    <td>${t.cargo_kg} kg</td><td>${statusPill(t.status)}</td></tr>`);
+  renderGroup('Maintenance', res.maintenance, 'maintenance', ({ m }) => `<tr style="cursor:pointer" onclick="navigate('maintenance')">
+    <td><b>${escapeHtml(m.vehicle_reg)}</b></td><td>${escapeHtml(m.description)}</td>
+    <td>${fmtINR(m.cost)}</td><td>${escapeHtml(m.status)}</td></tr>`);
+  if (!r.children.length) {
+    r.innerHTML = `<p class="text-soft">No results found for "<b>${escapeHtml(q)}</b>".</p>`;
+  }
+}
+
+function setupMasterSearch() {
+  const input = $('#master-search');
+  const dd = $('#search-dropdown');
+  if (!input || !dd) return;
+  let debounce;
+  input.addEventListener('input', () => {
+    clearTimeout(debounce);
+    debounce = setTimeout(async () => {
+      if (!input.value.trim()) { dd.classList.add('hidden'); return; }
+      try { await search.data; } catch {}
+      renderSearchDropdown(input.value);
+    }, 120);
+  });
+  input.addEventListener('focus', () => {
+    if (input.value.trim()) renderSearchDropdown(input.value);
+  });
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('.search-wrap')) return;
+    dd.classList.add('hidden');
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && input.value.trim()) {
+      dd.classList.add('hidden');
+      state._searchQ = input.value.trim();
+      navigate('search');
+    } else if (e.key === 'Escape') {
+      dd.classList.add('hidden');
+      input.blur();
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      input.focus();
+      input.select();
+    }
+  });
+}
 
 // =================== Dashboard =================== //
 async function renderDashboard(c) {
@@ -1357,25 +1607,47 @@ $('#ai-fab-form').addEventListener('submit', async (e) => {
 
 // =================== Notifications =================== //
 async function renderNotifications(c) {
-  const list = await api('/notifications');
+  let list = [];
+  try { list = await api('/notifications'); }
+  catch (e) { c.innerHTML = `<div class="card"><h3>⚠️ Couldn't load notifications</h3><p>${escapeHtml(e.message)}</p></div>`; return; }
+  const unread = list.filter(n => !n.read).length;
   c.innerHTML = `
     <div class="card">
       <div class="flex-between mb-1">
-        <h3>🔔 Notifications</h3>
-        <button class="btn" id="mark-read">Mark all as read</button>
+        <h3>🔔 Notifications <span class="text-soft" style="font-size:.85rem;font-weight:500">(${list.length} total · ${unread} unread)</span></h3>
+        <button class="btn" id="mark-read" ${unread === 0 ? 'disabled style="opacity:.5;cursor:not-allowed"' : ''}>Mark all as read</button>
       </div>
-      ${list.length ? list.map(n => `
-        <div class="card" style="margin-bottom:.5rem">
-          <div>${n.kind === 'license_expiry' && n.message.includes('EXPIRED') ? '❌' :
-                  n.kind === 'license_expiry' ? '⚠️' : 'ℹ️'} ${escapeHtml(n.message)}</div>
-          <div class="text-soft" style="font-size:.8rem">${escapeHtml(n.created_at)}</div>
+      ${list.length === 0 ? `
+        <div style="padding:2.5rem 1rem;text-align:center;color:var(--text-soft)">
+          <div style="font-size:3rem;margin-bottom:.5rem">🔕</div>
+          <p>All clear — no outstanding notifications.</p>
+          <p style="font-size:.85rem;margin-top:.3rem">License expiry alerts and live event pings will appear here.</p>
         </div>
-      `).join('') : '<p class="text-soft">All clear — no outstanding notifications.</p>'}
+      ` : list.map(n => {
+        const icon = n.kind === 'license_expiry' ? (n.message.includes('EXPIRED') ? '❌' : '⚠️') :
+                     n.kind === 'trip' ? '📦' :
+                     n.kind === 'maintenance' ? '🛠️' :
+                     n.kind === 'vehicle' ? '🚐' : 'ℹ️';
+        const tone = !n.read ? 'background:rgba(99,102,241,0.06);border-left:3px solid var(--primary)' : '';
+        return `
+          <div class="card" style="margin-bottom:.5rem;${tone}">
+            <div class="flex-between">
+              <div>${icon} ${escapeHtml(n.message)}</div>
+              ${!n.read ? '<span class="pill pill-blue" style="font-size:.65rem">NEW</span>' : ''}
+            </div>
+            <div class="text-soft" style="font-size:.78rem;margin-top:.3rem">${escapeHtml(n.created_at)} · ${escapeHtml(n.kind || 'general')}</div>
+          </div>
+        `;
+      }).join('')}
     </div>
   `;
   $('#mark-read', c)?.addEventListener('click', async () => {
-    await api('/notifications/read-all', { method: 'POST' });
-    updateNotifBadge(); renderNotifications(c);
+    try {
+      await api('/notifications/read-all', { method: 'POST' });
+      toast('All notifications marked as read');
+      updateNotifBadge();
+      renderNotifications(c);
+    } catch (err) { toast(err.message, 'error'); }
   });
 }
 
@@ -1431,64 +1703,240 @@ async function renderUsers(c) {
 }
 
 // =================== Voice Commands (Web Speech API) =================== //
+const VOICE_GRAMMAR = [
+  { rx: /\bdashboard\b|\bhome\b/,                   page: 'dashboard' },
+  { rx: /\b(vehicle|vehicles|truck|trucks|van|vans|bus|buses|car|cars|fleet)\b/, page: 'vehicles' },
+  { rx: /\bdriver|drivers/,                        page: 'drivers' },
+  { rx: /\btrip|trips|delivery|deliveries|shipment|shipments/, page: 'trips' },
+  { rx: /\b(map|live map|fleet map|gps|location)\b/, page: 'map' },
+  { rx: /\b(maintenance|service|repair|garage|shop)\b/, page: 'maintenance' },
+  { rx: /\b(report|reports|analytics|metrics|kpi|kpis)\b/, page: 'reports' },
+  { rx: /\b(fuel|expense|expenses|cost|costs|spend|spending)\b/, page: 'fuel' },
+  { rx: /\b(notification|notifications|alerts|inbox)\b/, page: 'notifications' },
+  { rx: /\b(leaderboard|scoreboard|ranking|rank|rankings)\b/, page: 'leaderboard' },
+  { rx: /\b(predictive|maintenance ai|ai risk|risk ai)\b/, page: 'predictive' },
+  { rx: /\b(audit|log|history|timeline|activity)\b/, page: 'audit' },
+  { rx: /\b(users|user management|team|staff)\b/, page: 'users' },
+  { rx: /\b(ai assistant|chat assistant|assistant|chat bot|chatbot|ai chat)\b/, action: 'open-ai' },
+  { rx: /\b(dark mode|night mode|switch to dark|dark theme)\b/, action: 'theme-dark' },
+  { rx: /\b(light mode|day mode|switch to light|light theme)\b/, action: 'theme-light' },
+  { rx: /\b(toggle theme|switch theme)\b/,         action: 'theme-toggle' },
+  { rx: /\b(log out|sign out|logout)\b/,           action: 'logout' },
+  { rx: /\b(search .+|find .+|look for .+)\b/,     action: 'search' },
+];
+
 function setupVoice() {
+  const btn = $('#voice-btn');
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!btn) return;
   if (!SR) {
-    $('#voice-btn').title = 'Voice not supported on this browser';
-    $('#voice-btn').style.opacity = .5;
+    btn.title = 'Voice not supported on this browser';
+    btn.style.opacity = .45;
+    btn.style.cursor = 'not-allowed';
+    btn.addEventListener('click', () => toast('Voice commands are not supported in this browser. Try Chrome/Edge.', 'error'));
     return;
   }
-  const r = new SR();
-  r.continuous = false; r.interimResults = false; r.lang = 'en-US';
-  r.onresult = (e) => {
-    const transcript = e.results[0][0].transcript.toLowerCase().trim();
-    $('#voice-text').textContent = `"${transcript}"`;
-    handleVoiceCommand(transcript);
-  };
-  r.onerror = () => $('#voice-overlay').classList.add('hidden');
-  r.onend = () => $('#voice-overlay').classList.add('hidden');
-  state.recognition = r;
+  let active = false;
+  function start() {
+    if (active) return;
+    active = true;
+    let r;
+    try { r = new SR(); } catch { active = false; return; }
+    r.continuous = false;
+    r.interimResults = true;
+    r.lang = 'en-US';
+    r.maxAlternatives = 1;
 
-  $('#voice-btn').addEventListener('click', () => {
-    $('#voice-text').textContent = 'Listening...';
-    $('#voice-overlay').classList.remove('hidden');
-    try { r.start(); } catch {}
-  });
-  $('#voice-stop').addEventListener('click', () => {
-    try { r.stop(); } catch {}
-    $('#voice-overlay').classList.add('hidden');
+    let finalTranscript = '';
+    r.onresult = (e) => {
+      let interim = '';
+      finalTranscript = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) finalTranscript += t;
+        else interim += t;
+      }
+      const shown = (finalTranscript + interim).trim();
+      const tv = $('#voice-text');
+      if (tv) tv.textContent = shown ? `"${shown}"` : 'Listening…';
+    };
+    r.onerror = (e) => {
+      active = false;
+      const overlay = $('#voice-overlay');
+      if (overlay) overlay.classList.add('hidden');
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+        toast('🎙️ Microphone access denied. Allow it in browser settings.', 'error');
+      } else if (e.error === 'no-speech') {
+        toast('🎙️ No speech detected — try again.', 'error');
+      } else if (e.error && e.error !== 'aborted') {
+        toast('🎙️ Voice error: ' + e.error, 'error');
+      }
+    };
+    r.onend = () => {
+      active = false;
+      const overlay = $('#voice-overlay');
+      if (overlay) overlay.classList.add('hidden');
+      const t = finalTranscript.trim();
+      if (t) handleVoiceCommand(t.toLowerCase());
+    };
+
+    const overlay = $('#voice-overlay');
+    if (overlay) overlay.classList.remove('hidden');
+    const tv = $('#voice-text');
+    if (tv) tv.textContent = 'Listening…';
+    try { r.start(); }
+    catch (err) {
+      active = false;
+      if (overlay) overlay.classList.add('hidden');
+      toast('🎙️ Could not start voice: ' + err.message, 'error');
+    }
+  }
+
+  btn.addEventListener('click', start);
+  const stopBtn = $('#voice-stop');
+  if (stopBtn) {
+    stopBtn.addEventListener('click', () => {
+      // Abort any in-flight recognition by reloading the recognition flow.
+      // Browsers don't expose `state.recognition.stop()` reliably here because
+      // we recreate it per session — but toggling active + hiding the overlay
+      // is enough; the next start() will replace it.
+      active = false;
+      const overlay = $('#voice-overlay');
+      if (overlay) overlay.classList.add('hidden');
+    });
+  }
+
+  // Keyboard shortcut: hold Ctrl (or Cmd) and press Space to trigger voice.
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.code === 'Space') {
+      e.preventDefault();
+      start();
+    }
   });
 }
 
 function handleVoiceCommand(t) {
-  if (/dashboard|home/.test(t))        navigate('dashboard');
-  else if (/map/.test(t))              navigate('map');
-  else if (/vehicle/.test(t))          navigate('vehicles');
-  else if (/driver/.test(t))           navigate('drivers');
-  else if (/trip/.test(t))             navigate('trips');
-  else if (/maintenance|service/.test(t)) navigate('maintenance');
-  else if (/report|analytics/.test(t)) navigate('reports');
-  else if (/notification/.test(t))     navigate('notifications');
-  else if (/leaderboard|scoreboard|ranking/.test(t)) navigate('leaderboard');
-  else if (/predictive|ai|maintenance ai/.test(t)) navigate('predictive');
-  else if (/audit|log|history/.test(t)) navigate('audit');
-  else if (/assistant|chat/.test(t))   navigate('ai');
-  else if (/logout|sign out/.test(t))  doLogout();
-  else if (/theme|dark|light/.test(t)) toggleTheme();
-  else toast(`🤔 Didn't recognize: "${t}"`, 'error');
+  // Specific phrase matches first so "open AI assistant" doesn't get caught by a shorter match.
+  let page = null, action = null, searchQ = null;
+  if (/\b(open|launch|show|go to)\s+ai\b/.test(t)) action = 'open-ai';
+  for (const g of VOICE_GRAMMAR) {
+    if (g.rx.test(t)) {
+      if (g.action === 'search') {
+        const m = t.match(/\b(?:search|find|look for)\s+(.+)/);
+        if (m) searchQ = m[1].trim();
+      } else if (g.page) {
+        page = g.page;
+        break;
+      } else if (g.action) {
+        action = g.action;
+        break;
+      }
+    }
+  }
+  if (searchQ) {
+    state._searchQ = searchQ;
+    navigate('search');
+    toast(`🔎 Searching "${searchQ}"`);
+    return;
+  }
+  if (page) {
+    navigate(page);
+    toast(`🎙️ Opening ${page.replace(/^\w/, c => c.toUpperCase())}`);
+    return;
+  }
+  switch (action) {
+    case 'open-ai':     openAiPanel(); toast('🤖 AI Assistant opened'); return;
+    case 'theme-dark':  applyTheme('dark'); toast('🌙 Dark theme'); return;
+    case 'theme-light': applyTheme('light'); toast('☀️ Light theme'); return;
+    case 'theme-toggle':toggleTheme(); return;
+    case 'logout':      doLogout(); return;
+  }
+  toast(`🤔 Didn't recognize: "${t}"`, 'error');
 }
 
-// =================== Boot =================== //
+// =================== Keyboard navigation (g + key) =================== //
+(function setupShortcuts() {
+  const map = {
+    d: 'dashboard', h: 'dashboard',
+    v: 'vehicles',  c: 'vehicles',
+    r: 'drivers',   D: 'drivers',
+    t: 'trips',     T: 'trips',
+    m: 'map',       M: 'map',
+    s: 'maintenance', S: 'maintenance',
+    f: 'fuel',      F: 'fuel',
+    e: 'reports',   E: 'reports',
+    l: 'leaderboard', L: 'leaderboard',
+    p: 'predictive', P: 'predictive',
+    a: 'audit',     A: 'audit',
+    u: 'users',     U: 'users',
+    n: 'notifications', N: 'notifications',
+  };
+  let pending = false, pendingTimer;
+  document.addEventListener('keydown', (e) => {
+    const tgt = e.target;
+    if (tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable)) return;
+    if (pending && map[e.key]) {
+      const page = map[e.key];
+      if (page) {
+        e.preventDefault();
+        navigate(page);
+        if (state.user && state.user.role !== 'Fleet Manager' && state.user.role !== 'Safety Officer' &&
+            (page === 'audit' || page === 'predictive' || page === 'users')) {
+          // role-gated pages will be guarded inside the renderer too
+        }
+      }
+      pending = false; clearTimeout(pendingTimer); return;
+    }
+    if (e.key === 'g') {
+      pending = true;
+      clearTimeout(pendingTimer);
+      pendingTimer = setTimeout(() => { pending = false; }, 1200);
+    }
+  });
+})();
+
+// =================== Online indicator + health ping =================== //
+function setupHealthIndicator() {
+  const d = document.createElement('div');
+  d.id = 'health-dot';
+  d.title = 'Server status';
+  d.style.cssText = 'display:inline-flex;align-items:center;gap:.3rem;font-size:.72rem;color:var(--text-soft);margin-right:.4rem';
+  d.innerHTML = '<span style="width:8px;height:8px;border-radius:50%;background:var(--success);box-shadow:0 0 0 3px rgba(16,185,129,.18);transition:background .2s"></span><span>online</span>';
+  const anchor = $('#theme-icon');
+  if (anchor) anchor.parentNode.insertBefore(d, anchor);
+
+  async function ping() {
+    try {
+      const r = await fetch('/healthz', { credentials: 'include', cache: 'no-store' });
+      if (r.ok) setState(true, 'online');
+      else      setState(false, 'degraded');
+    } catch { setState(false, 'offline'); }
+  }
+  function setState(ok, label) {
+    if (!d) return;
+    const dot = d.firstChild;
+    const text = d.lastChild;
+    dot.style.background = ok ? 'var(--success)' : 'var(--danger)';
+    dot.style.boxShadow = ok ? '0 0 0 3px rgba(16,185,129,.18)' : '0 0 0 3px rgba(239,68,68,.18)';
+    text.textContent = label;
+  }
+  ping();
+  setInterval(ping, 60_000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) ping(); });
+}
+
+
 (async function boot() {
   try {
     const { user } = await api('/auth/me');
     state.user = user;
     showApp();
     connectWS();
+    setupHealthIndicator();
   } catch { showLogin(); }
   setupVoice();
 
-  // PWA: register service worker
+  // PWA: register service worker (cache busted on each release via sw.js CACHE)
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => {});
   }

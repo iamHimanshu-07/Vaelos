@@ -198,6 +198,30 @@ app.get('/api/predictive-maintenance', authRequired, (req, res) =>
   res.json(ops.predictiveMaintenance()));
 app.get('/api/leaderboard', authRequired, (req, res) =>
   res.json(ops.driverLeaderboard()));
+app.get('/api/search', authRequired, (req, res) => {
+  const q = String(req.query.q || '').trim().toLowerCase();
+  if (!q) return res.json({ vehicles: [], drivers: [], trips: [], maintenance: [] });
+  const score = (val) => {
+    const s = String(val || '').toLowerCase();
+    if (!s) return 0;
+    if (s === q) return 100;
+    if (s.startsWith(q)) return 80;
+    if (s.includes(q)) return 50;
+    return 0;
+  };
+  const top = (arr, fields) => arr
+    .map(item => ({ item, sc: Math.max(...fields.map(f => score(item[f]))) }))
+    .filter(x => x.sc > 0)
+    .sort((a, b) => b.sc - a.sc)
+    .slice(0, 10)
+    .map(x => x.item);
+  res.json({
+    vehicles:     top(ops.listVehicles(),     ['reg_no', 'name', 'type', 'region', 'status']),
+    drivers:      top(ops.listDrivers(),      ['name', 'license_no', 'contact', 'license_category', 'status']),
+    trips:        top(ops.listTrips(),        ['id', 'source', 'destination', 'vehicle_reg', 'driver_name', 'status']),
+    maintenance:  top(ops.listMaintenance(),  ['vehicle_reg', 'description', 'notes', 'status']),
+  });
+});
 app.post('/api/ai', authRequired, (req, res) => {
   const { question } = req.body || {};
   res.json(ops.aiAsk(question));
