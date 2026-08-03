@@ -1175,3 +1175,49 @@ hr.sep { border: 0; border-top: 1px solid var(--border); margin: 1rem 0; }
   text-align: center;
 }
 .profile-version { margin-top: .35rem; font-size: .7rem; letter-spacing: .04em; }
+
+/* =================== Demo Preview chip + Upgrade card =================== */
+.demo-chip {
+  display: inline-flex; align-items: center;
+  padding: .3rem .6rem; margin: .4rem 0 .2rem;
+  font-size: .72rem; font-weight: 700; letter-spacing: .04em;
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(99,102,241,.18), rgba(34,211,238,.14));
+  border: 1px solid rgba(99,102,241,.32);
+  color: var(--primary);
+  width: fit-content;
+}
+.upgrade-card {
+  max-width: 640px; margin: 2rem auto;
+  text-align: center; padding: 2.4rem 2rem !important;
+  position: relative; overflow: hidden;
+  background:
+    radial-gradient(60% 50% at 0% 0%, rgba(99,102,241,.10), transparent 70%),
+    radial-gradient(60% 50% at 100% 100%, rgba(34,211,238,.10), transparent 70%),
+    var(--bg-card-solid);
+  border: 1px solid var(--border);
+}
+.upgrade-card::before {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(135deg, transparent 0%, transparent 60%, rgba(99,102,241,.08) 100%);
+  pointer-events: none;
+}
+.upgrade-emoji { font-size: 3rem; line-height: 1; margin-bottom: .6rem; }
+.upgrade-title {
+  font-size: 1.6rem; font-weight: 800; letter-spacing: -.01em;
+  margin: 0 0 .6rem;
+  background: linear-gradient(90deg, var(--primary), var(--accent));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.upgrade-body { color: var(--text-soft); font-size: 1rem; line-height: 1.55; max-width: 480px; margin: 0 auto 1.4rem; }
+.upgrade-cta-row { display: flex; gap: .6rem; justify-content: center; flex-wrap: wrap; margin-bottom: 1.4rem; }
+.upgrade-cta { font-weight: 700; }
+.upgrade-perks {
+  list-style: none; padding: 0; margin: 0 0 1rem;
+  display: grid; grid-template-columns: 1fr 1fr; gap: .35rem 1.2rem;
+  text-align: left; max-width: 460px; margin-left: auto; margin-right: auto;
+  font-size: .88rem; color: var(--text);
+}
+.upgrade-perks li { padding: .15rem 0; }
+.upgrade-foot { font-size: .78rem; margin-top: .8rem; }
+@media (max-width: 520px) { .upgrade-perks { grid-template-columns: 1fr; } }

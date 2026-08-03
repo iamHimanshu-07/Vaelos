@@ -15,6 +15,17 @@ function paintVersion() {
     el.textContent = 'v' + APP_VERSION;
   });
 }
+
+// Demo accounts are scoped so visitors can poke around without bumping into
+// the full product. Today the demo admin sees only Overview + Core pages;
+// everything else bounces to a friendly upgrade card.
+function isDemoAdmin() {
+  return state.user && String(state.user.email || '').toLowerCase() === 'admin@vaelos.com';
+}
+function isDemoScopeLocked(page) {
+  if (!isDemoAdmin()) return false;
+  return !['dashboard', 'vehicles', 'drivers', 'trips'].includes(page);
+}
 async function loadBuild() {
   try {
     const info = await api('/build');
@@ -104,6 +115,7 @@ function showApp() {
   applyTheme(state.theme);
   populateProfile();
   buildNav();
+  renderDemoBadge();
   navigate(state.page);
   // Reveal the floating AI bubble once the user is signed in.
   $('#ai-fab').classList.remove('hidden');
@@ -374,6 +386,9 @@ function buildNav() {
   for (const item of NAV_ITEMS) {
     if (item.hideInNav) continue;
     if (!item.roles.includes('*') && !item.roles.includes(state.user.role)) continue;
+    // Demo admin gets only Overview + Core groups. Everything else is
+    // hidden from the sidebar and replaced with an upgrade card if visited.
+    if (isDemoAdmin() && isDemoScopeLocked(item.id)) continue;
     if (item.group && item.group !== lastGroup) {
       const sep = document.createElement('div');
       sep.className = 'nav-group';
@@ -387,6 +402,18 @@ function buildNav() {
     if (state.page === item.id) btn.classList.add('active');
     btn.addEventListener('click', () => navigate(item.id));
     nav.appendChild(btn);
+  }
+}
+
+function renderDemoBadge() {
+  // Show a small "Demo · Preview mode" chip under the brand for demo accounts
+  // so the limited sidebar doesn't feel like a bug.
+  const slot = $('#sidebar-demo-badge');
+  if (!slot) return;
+  if (isDemoAdmin()) {
+    slot.innerHTML = `<span class="demo-chip" title="Demo accounts get a curated preview. Create your own to unlock the full workspace.">✨ Demo preview</span>`;
+  } else {
+    slot.innerHTML = '';
   }
 }
 
@@ -425,6 +452,12 @@ async function render() {
   const c = $('#content');
   c.innerHTML = '<p class="text-soft">Loading…</p>';
   try {
+    // Demo admin is scoped to Overview + Core only — anything else gets a
+    // cheerful upgrade card so the empty sidebar doesn't feel like a bug.
+    if (isDemoAdmin() && isDemoScopeLocked(state.page)) {
+      await renderDemoLocked(c);
+      return;
+    }
     switch (state.page) {
       case 'dashboard':     await renderDashboard(c); break;
       case 'map':           await renderMap(c); break;
@@ -699,6 +732,77 @@ function setupMasterSearch() {
 }
 
 // =================== Dashboard =================== //
+async function renderDemoLocked(c) {
+  // Curated copy the demo admin sees when they stray outside Overview + Core.
+  // Each entry has a headline, a body line, and an emoji to keep the tone light.
+  const messages = [
+    {
+      headline: 'Live Ops are part of the full ride.',
+      body:     'Dispatching trips and tracking vehicles in real time is reserved for live workspaces. Spin up your own in under a minute — your demo data stays intact.',
+      emoji:    '🗺️',
+    },
+    {
+      headline: 'Maintenance & live ops are locked for demo.',
+      body:     'Maintenance logs, fuel tracking, expense capture and the live map all unlock the moment you create your own workspace.',
+      emoji:    '🛠️',
+    },
+    {
+      headline: 'This corner is for paying customers only.',
+      body:     'Reports, predictive AI and the full audit timeline come with your own workspace. The good news: signing up is faster than reading this card.',
+      emoji:    '📈',
+    },
+    {
+      headline: 'Want the full Vaelos experience?',
+      body:     'Create a free workspace and you get every page, every export, every alert — plus your own seeded fleet ready in seconds.',
+      emoji:    '✨',
+    },
+    {
+      headline: 'Great taste — that page is the premium tier.',
+      body:     'Your demo covers the Overview + Core basics. Sign up for a free workspace and we hand you the keys to the rest.',
+      emoji:    '🚀',
+    },
+    {
+      headline: 'You\'ve found the demo boundary.',
+      body:     'Beyond Overview + Core, everything else lives in your own workspace. Spin one up — it takes about 30 seconds and no credit card.',
+      emoji:    '🔒',
+    },
+  ];
+  // Stable per-page choice so the message doesn't change on every render.
+  const seed = state.page.charCodeAt(0) + (state.page.length || 0);
+  const m = messages[seed % messages.length];
+  c.innerHTML = `
+    <div class="card upgrade-card">
+      <div class="upgrade-emoji">${m.emoji}</div>
+      <h2 class="upgrade-title">${escapeHtml(m.headline)}</h2>
+      <p class="upgrade-body">${escapeHtml(m.body)}</p>
+      <div class="upgrade-cta-row">
+        <button class="btn btn-primary upgrade-cta" id="upgrade-cta">Create your account →</button>
+        <button class="btn upgrade-secondary" id="upgrade-back">Back to Overview</button>
+      </div>
+      <ul class="upgrade-perks">
+        <li>✅ Real fleet workspace with persistent data</li>
+        <li>✅ Live map, predictive AI, full audit log</li>
+        <li>✅ Fuel logs, expenses, exports — no limits</li>
+        <li>✅ No credit card, no demo clock</li>
+      </ul>
+      <div class="upgrade-foot text-soft">
+        You're signed in as <b>${escapeHtml(state.user.email)}</b> · demo preview mode.
+      </div>
+    </div>
+  `;
+  const goSignup = () => {
+    // Sign out the demo and bounce to the signup view — visitor becomes a
+    // real owner of their own workspace.
+    api('/auth/logout', { method: 'POST' }).finally(() => {
+      showLogin();
+      showAuthView('signup');
+    });
+  };
+  const back = () => navigate('dashboard');
+  $('#upgrade-cta', c).addEventListener('click', goSignup);
+  $('#upgrade-back', c).addEventListener('click', back);
+}
+
 async function renderDashboard(c) {
   const [kpis, vehicles] = await Promise.all([api('/kpis'), api('/vehicles')]);
   c.innerHTML = `
