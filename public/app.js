@@ -17,14 +17,23 @@ function paintVersion() {
 }
 
 // Demo accounts are scoped so visitors can poke around without bumping into
-// the full product. Today the demo admin sees only Overview + Core pages;
-// everything else bounces to a friendly upgrade card.
-function isDemoAdmin() {
-  return state.user && String(state.user.email || '').toLowerCase() === 'admin@vaelos.com';
+// the full product. The demo admin sees Overview + Core; the demo driver
+// sees Vehicles + Fuel & Expenses; everyone else gets the full product.
+const DEMO_SCOPE = {
+  'admin@vaelos.com': ['dashboard', 'vehicles', 'drivers', 'trips'],
+  'alex@vaelos.com':  ['vehicles', 'fuel'],
+};
+function demoAllowedPages() {
+  if (!state.user) return null;
+  return DEMO_SCOPE[String(state.user.email || '').toLowerCase()] || null;
+}
+function isDemoUser() {
+  return !!demoAllowedPages();
 }
 function isDemoScopeLocked(page) {
-  if (!isDemoAdmin()) return false;
-  return !['dashboard', 'vehicles', 'drivers', 'trips'].includes(page);
+  const allowed = demoAllowedPages();
+  if (!allowed) return false;
+  return !allowed.includes(page);
 }
 async function loadBuild() {
   try {
@@ -181,6 +190,12 @@ $('#login-form').addEventListener('submit', async (e) => {
       body: { email: $('#email').value, password: $('#password').value },
     });
     state.user = user;
+    // Land demo accounts on the first page they're allowed to see so the
+    // first render is meaningful instead of an upgrade card.
+    const allowed = demoAllowedPages();
+    if (allowed && !allowed.includes(state.page)) {
+      state.page = allowed[0];
+    }
     toast(`Welcome, ${user.name}!`);
     showApp();
     connectWS();
@@ -388,7 +403,7 @@ function buildNav() {
     if (!item.roles.includes('*') && !item.roles.includes(state.user.role)) continue;
     // Demo admin gets only Overview + Core groups. Everything else is
     // hidden from the sidebar and replaced with an upgrade card if visited.
-    if (isDemoAdmin() && isDemoScopeLocked(item.id)) continue;
+    if (isDemoUser() && isDemoScopeLocked(item.id)) continue;
     if (item.group && item.group !== lastGroup) {
       const sep = document.createElement('div');
       sep.className = 'nav-group';
@@ -410,7 +425,7 @@ function renderDemoBadge() {
   // so the limited sidebar doesn't feel like a bug.
   const slot = $('#sidebar-demo-badge');
   if (!slot) return;
-  if (isDemoAdmin()) {
+  if (isDemoUser()) {
     slot.innerHTML = `<span class="demo-chip" title="Demo accounts get a curated preview. Create your own to unlock the full workspace.">✨ Demo preview</span>`;
   } else {
     slot.innerHTML = '';
@@ -454,7 +469,7 @@ async function render() {
   try {
     // Demo admin is scoped to Overview + Core only — anything else gets a
     // cheerful upgrade card so the empty sidebar doesn't feel like a bug.
-    if (isDemoAdmin() && isDemoScopeLocked(state.page)) {
+    if (isDemoUser() && isDemoScopeLocked(state.page)) {
       await renderDemoLocked(c);
       return;
     }
@@ -733,9 +748,43 @@ function setupMasterSearch() {
 
 // =================== Dashboard =================== //
 async function renderDemoLocked(c) {
-  // Curated copy the demo admin sees when they stray outside Overview + Core.
-  // Each entry has a headline, a body line, and an emoji to keep the tone light.
-  const messages = [
+  // Curated copy that demo visitors see when they stray outside the curated
+  // preview. Each demo role has its own set of messages so the upgrade pitch
+  // feels relevant to the page being blocked.
+  const role = String(state.user.email || '').toLowerCase();
+  const isDriverDemo = role === 'alex@vaelos.com';
+  const messages = isDriverDemo ? [
+    {
+      headline: 'Operational reports are part of the full ride.',
+      body:     'Reports, live KPI dashboards and analytics live in your own workspace. Spin up a free account in under a minute and your demo data stays intact.',
+      emoji:    '📊',
+    },
+    {
+      headline: 'The maintenance log is the team\'s, not the demo\'s.',
+      body:     'Logging repairs and tracking breakdowns opens up when you create your own workspace. Until then, Vehicles + Fuel & Expenses are yours to play with.',
+      emoji:    '🛠️',
+    },
+    {
+      headline: 'AI insights are waiting for a real driver.',
+      body:     'Predictive maintenance, leaderboards and the AI assistant all unlock the moment you sign up. It\'s free and the demo clock never starts.',
+      emoji:    '🤖',
+    },
+    {
+      headline: 'Want the full Vaelos experience?',
+      body:     'Create a free workspace and you get every page, every export, every alert — plus your own seeded fleet ready in seconds.',
+      emoji:    '✨',
+    },
+    {
+      headline: 'Great taste — that page is the premium tier.',
+      body:     'Your demo covers Vehicles + Fuel & Expenses. Sign up for a free workspace and we hand you the keys to the rest.',
+      emoji:    '🚀',
+    },
+    {
+      headline: 'You\'ve found the demo boundary.',
+      body:     'Beyond Vehicles + Fuel & Expenses, everything else lives in your own workspace. Spin one up — it takes about 30 seconds and no credit card.',
+      emoji:    '🔒',
+    },
+  ] : [
     {
       headline: 'Live Ops are part of the full ride.',
       body:     'Dispatching trips and tracking vehicles in real time is reserved for live workspaces. Spin up your own in under a minute — your demo data stays intact.',
@@ -770,6 +819,7 @@ async function renderDemoLocked(c) {
   // Stable per-page choice so the message doesn't change on every render.
   const seed = state.page.charCodeAt(0) + (state.page.length || 0);
   const m = messages[seed % messages.length];
+  const backLabel = isDriverDemo ? 'Back to Vehicles' : 'Back to Overview';
   c.innerHTML = `
     <div class="card upgrade-card">
       <div class="upgrade-emoji">${m.emoji}</div>
@@ -777,7 +827,7 @@ async function renderDemoLocked(c) {
       <p class="upgrade-body">${escapeHtml(m.body)}</p>
       <div class="upgrade-cta-row">
         <button class="btn btn-primary upgrade-cta" id="upgrade-cta">Create your account →</button>
-        <button class="btn upgrade-secondary" id="upgrade-back">Back to Overview</button>
+        <button class="btn upgrade-secondary" id="upgrade-back">${backLabel}</button>
       </div>
       <ul class="upgrade-perks">
         <li>✅ Real fleet workspace with persistent data</li>
@@ -798,7 +848,8 @@ async function renderDemoLocked(c) {
       showAuthView('signup');
     });
   };
-  const back = () => navigate('dashboard');
+  // Driver demo "back" goes to Vehicles (their home); admin demo goes to Overview.
+  const back = () => navigate(isDriverDemo ? 'vehicles' : 'dashboard');
   $('#upgrade-cta', c).addEventListener('click', goSignup);
   $('#upgrade-back', c).addEventListener('click', back);
 }
