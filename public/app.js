@@ -5,16 +5,36 @@
 
 const API = '/api';
 const WS_URL = (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws';
+
+// Theme: persisted value, or auto-detect from the OS on first visit.
+function initialTheme() {
+  const stored = localStorage.getItem('vaelos-theme');
+  if (stored === 'light' || stored === 'dark') return stored;
+  return window.matchMedia &&
+         window.matchMedia('(prefers-color-scheme: dark)').matches
+         ? 'dark' : 'light';
+}
 let state = {
   user: null,
   page: 'dashboard',
-  theme: localStorage.getItem('vaelos-theme') || 'light',
+  theme: initialTheme(),
   map: null,
   mapMarkers: [],
   ws: null,
   recognition: null,
 };
 document.documentElement.setAttribute('data-theme', state.theme);
+
+function applyTheme(theme) {
+  state.theme = theme;
+  document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem('vaelos-theme', theme);
+  const icon = $('#theme-icon');
+  if (icon) icon.textContent = theme === 'dark' ? '☀️' : '🌙';
+}
+function toggleTheme() {
+  applyTheme(state.theme === 'dark' ? 'light' : 'dark');
+}
 
 // =================== Helpers =================== //
 const $ = (s, r = document) => r.querySelector(s);
@@ -58,10 +78,24 @@ function showLogin() {
 function showApp() {
   $('#login-screen').classList.add('hidden');
   $('#app').classList.remove('hidden');
-  $('#user-name').textContent = state.user.name;
-  $('#user-role').textContent = state.user.role;
+  applyTheme(state.theme);
+  populateProfile();
   buildNav();
   navigate(state.page);
+  // Reveal the floating AI bubble once the user is signed in.
+  $('#ai-fab').classList.remove('hidden');
+}
+function initialsOf(name) {
+  return String(name || '?')
+    .trim().split(/\s+/).slice(0, 2)
+    .map(w => w[0] ? w[0].toUpperCase() : '').join('') || '?';
+}
+function populateProfile() {
+  if (!state.user) return;
+  $('#profile-name').textContent  = state.user.name;
+  $('#profile-email').textContent = state.user.email || '';
+  $('#profile-role').textContent  = state.user.role;
+  $('#profile-initials').textContent = initialsOf(state.user.name);
 }
 
 $('#login-form').addEventListener('submit', async (e) => {
@@ -78,25 +112,55 @@ $('#login-form').addEventListener('submit', async (e) => {
     connectWS();
   } catch (err) { $('#login-error').textContent = err.message; }
 });
-$('#logout-btn').addEventListener('click', async () => {
-  try { await api('/auth/logout', { method: 'POST' }); } catch {}
-  if (state.ws) try { state.ws.close(); } catch {}
-  showLogin();
+function doLogout() {
+  return (async () => {
+    try { await api('/auth/logout', { method: 'POST' }); } catch {}
+    if (state.ws) try { state.ws.close(); } catch {}
+    $('#ai-panel').classList.add('hidden');
+    $('#ai-fab').classList.add('hidden');
+    showLogin();
+  })();
+}
+
+// ----- Top-right controls: theme icon, profile menu ----- //
+$('#theme-icon').addEventListener('click', toggleTheme);
+
+function closeProfileMenu() {
+  $('#profile-menu').classList.add('hidden');
+  $('#profile-btn').setAttribute('aria-expanded', 'false');
+}
+function openProfileMenu() {
+  $('#profile-menu').classList.remove('hidden');
+  $('#profile-btn').setAttribute('aria-expanded', 'true');
+}
+$('#profile-btn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const menu = $('#profile-menu');
+  if (menu.classList.contains('hidden')) openProfileMenu(); else closeProfileMenu();
 });
-$('#theme-toggle').addEventListener('click', () => {
-  state.theme = state.theme === 'dark' ? 'light' : 'dark';
-  document.documentElement.setAttribute('data-theme', state.theme);
-  localStorage.setItem('vaelos-theme', state.theme);
+document.addEventListener('click', (e) => {
+  const menu = $('#profile-menu');
+  if (!menu || menu.classList.contains('hidden')) return;
+  if (e.target.closest('#profile-menu') || e.target.closest('#profile-btn')) return;
+  closeProfileMenu();
 });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    closeProfileMenu();
+    $('#ai-panel').classList.add('hidden');
+  }
+});
+$('#profile-theme').addEventListener('click', () => { toggleTheme(); closeProfileMenu(); });
+$('#profile-logout').addEventListener('click', () => { closeProfileMenu(); doLogout(); });
 
 // =================== WebSocket live =================== //
 function connectWS() {
   try {
     state.ws = new WebSocket(WS_URL);
-  } catch (e) { setWsStatus(false); return; }
-  state.ws.onopen = () => setWsStatus(true);
-  state.ws.onclose = () => { setWsStatus(false); setTimeout(connectWS, 3000); };
-  state.ws.onerror = () => setWsStatus(false);
+  } catch (e) { return; }
+  state.ws.onopen = () => {};
+  state.ws.onclose = () => { setTimeout(connectWS, 3000); };
+  state.ws.onerror = () => {};
   state.ws.onmessage = (e) => {
     try {
       const m = JSON.parse(e.data);
@@ -118,13 +182,6 @@ function connectWS() {
       }
     } catch {}
   };
-}
-function setWsStatus(online) {
-  const dot = $('.ws-dot'); const lbl = $('.ws-label');
-  if (!dot) return;
-  dot.classList.toggle('online', online);
-  dot.classList.toggle('offline', !online);
-  lbl.textContent = online ? 'live' : 'offline';
 }
 
 // =================== Navigation =================== //
@@ -1135,6 +1192,41 @@ async function renderAI(c) {
   });
 }
 
+// =================== Floating AI Assistant (FAB + panel) =================== //
+function openAiPanel() {
+  $('#ai-panel').classList.remove('hidden');
+  setTimeout(() => { $('#ai-fab-input')?.focus(); }, 50);
+}
+function closeAiPanel() { $('#ai-panel').classList.add('hidden'); }
+$('#ai-fab').addEventListener('click', () => {
+  $('#ai-panel').classList.contains('hidden') ? openAiPanel() : closeAiPanel();
+});
+$('#ai-panel-close').addEventListener('click', closeAiPanel);
+$('#ai-fab-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const q = $('#ai-fab-input').value.trim();
+  if (!q) return;
+  const box = $('#ai-chat-box');
+  box.insertAdjacentHTML('beforeend', `<div class="chat-msg user">${escapeHtml(q)}</div>`);
+  $('#ai-fab-input').value = '';
+  box.scrollTop = box.scrollHeight;
+  try {
+    const r = await api('/ai', { method: 'POST', body: { question: q } });
+    let tableHtml = '';
+    if (r.table && r.table.length) {
+      const cols = Object.keys(r.table[0]);
+      tableHtml = `<table><thead><tr>${cols.map(c => `<th>${escapeHtml(c)}</th>`).join('')}</tr></thead>
+        <tbody>${r.table.map(row =>
+          `<tr>${cols.map(c => `<td>${escapeHtml(row[c])}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+    }
+    box.insertAdjacentHTML('beforeend',
+      `<div class="chat-msg bot">${escapeHtml(r.answer)}${tableHtml ? `<div class="msg-table">${tableHtml}</div>` : ''}</div>`);
+  } catch (err) {
+    box.insertAdjacentHTML('beforeend', `<div class="chat-msg bot">⚠️ ${escapeHtml(err.message)}</div>`);
+  }
+  box.scrollTop = box.scrollHeight;
+});
+
 // =================== Notifications =================== //
 async function renderNotifications(c) {
   const list = await api('/notifications');
@@ -1251,8 +1343,8 @@ function handleVoiceCommand(t) {
   else if (/predictive|ai|maintenance ai/.test(t)) navigate('predictive');
   else if (/audit|log|history/.test(t)) navigate('audit');
   else if (/assistant|chat/.test(t))   navigate('ai');
-  else if (/logout|sign out/.test(t))  $('#logout-btn').click();
-  else if (/theme|dark|light/.test(t)) $('#theme-toggle').click();
+  else if (/logout|sign out/.test(t))  doLogout();
+  else if (/theme|dark|light/.test(t)) toggleTheme();
   else toast(`🤔 Didn't recognize: "${t}"`, 'error');
 }
 

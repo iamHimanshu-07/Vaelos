@@ -36,7 +36,26 @@ function resolveDbPath() {
 
 const DB_PATH = resolveDbPath();
 console.log(`[vaelos] using database at ${DB_PATH}`);
-const db = new Database(DB_PATH);
+
+let db;
+try {
+  db = new Database(DB_PATH);
+} catch (err) {
+  // Last-resort fallback: use /tmp which is always writable on Linux.
+  // Not persistent across redeploys, but keeps the app alive so the user
+  // can at least see a working dashboard while debugging the volume.
+  const fallback = '/tmp/vaelos.db';
+  console.error(`[vaelos] FATAL: cannot open ${DB_PATH}: ${err.message}`);
+  console.error(`[vaelos] falling back to ephemeral ${fallback}`);
+  try {
+    fs.mkdirSync('/tmp', { recursive: true });
+    db = new Database(fallback);
+  } catch (err2) {
+    console.error(`[vaelos] FATAL: even /tmp failed: ${err2.message}`);
+    throw err2;
+  }
+}
+
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
