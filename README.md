@@ -1,10 +1,10 @@
 # ⚡ Vaelos — Smart Transport Operations Platform
 
-> **v1.0** — Production-ready. Admin & Driver roles, Google-Maps-style live map, AI assistant, predictive maintenance, leaderboard, owner email notifications.
+> **v1.0** — Production-ready. Admin & Driver roles, Pro Command Center live map, AI assistant, predictive maintenance, leaderboard, owner email notifications.
 
-**Vaelos** is a fleet operations platform for managing vehicles, drivers, trips, maintenance, fuel, expenses, and AI-driven insights in one place. Built for hackathon scale — fast, self-contained, and PWA-installable.
+**Vaelos** is a fleet operations platform for managing vehicles, drivers, trips, maintenance, fuel, expenses, and AI-driven insights in one place. Built for enterprise scale — fast, stateless, and PWA-installable.
 
-> **Stack:** Node.js + Express + better-sqlite3 + WebSockets · Vanilla JS frontend · Leaflet maps · Progressive Web App
+> **Stack:** Node.js + Express + PostgreSQL (Neon) + WebSockets · Vanilla JS frontend · Leaflet maps · Progressive Web App
 
 ---
 
@@ -23,11 +23,11 @@
 - **Audit logging** of every mutation
 
 ### 🔥 Rare / uncommon features
-- 🗺️ **Interactive Live Map** — Leaflet-powered view of every vehicle with status-coloured markers, dispatch info, and OSM tiles
+- 🗺️ **Pro Command Center Map** — High-contrast dark-themed live map with Marker Clustering for large fleet management, status-coloured markers, and OSM tiles
 - 🤖 **AI Assistant** — Plain-English Q&A ("most expensive vehicles", "best ROI", "expired licenses", "fleet utilization") with rule-based NL → data
 - 🔮 **Predictive Maintenance AI** — Risk score per vehicle (odometer, fuel drift, days-since-service, repair history, ROI)
 - 🏆 **Driver Leaderboard** — Podium layout, gold/silver/bronze badges by safety score
-- 📋 **Audit Log Timeline** — Entity-coloured activity timeline of all mutations
+- 📋 **Audit Log Timeline** — Entity-coloured activity timeline of all mutations (Owner-exclusive access)
 - 🔔 **Live WebSocket updates** — KPI badges refresh in real time on any mutation
 - 🎙️ **Voice commands** — Web Speech API ("open dashboard", "go to vehicles", "toggle theme")
 - 📱 **PWA** — Installable, offline-capable service worker
@@ -38,9 +38,10 @@
 
 ```bash
 npm install
-npm run init-db      # create database with seed data
 npm start            # http://localhost:3000
 ```
+
+The database schema and seed data are automatically initialized on the first boot via `database.js`.
 
 Then sign in with one of the demo accounts:
 
@@ -65,18 +66,19 @@ Runs an end-to-end smoke test of all 10 mandatory business rules plus the new fe
 
 ```
 Vaelos/
-├── server.js                Express + WebSocket server
-├── database.js              SQLite schema & seed
-├── operations.js            All business logic (audit, predictive, AI, leaderboard)
-├── test_business_rules.js   End-to-end test suite
+├── api/
+│   └── index.js          Express + WebSocket server (Vercel Entry)
+├── database.js           PostgreSQL schema & seed
+├── operations.js         All business logic (audit, predictive, AI, leaderboard)
+├── test_business_rules.js End-to-end test suite
 ├── public/
-│   ├── index.html           Single-page app shell
-│   ├── app.js               Frontend router + all pages
-│   ├── style.css            Theme, dashboard, leaderboard podium, risk gauge, timeline
-│   ├── manifest.json        PWA manifest
-│   ├── sw.js                Service worker (offline shell)
-│   ├── icon-192.svg         App icon
-│   └── icon-512.svg         App icon
+│   ├── index.html        Single-page app shell
+│   ├── app.js            Frontend router + all pages
+│   ├── style.css         Theme, dashboard, leaderboard podium, risk gauge, timeline
+│   ├── manifest.json     PWA manifest
+│   ├── sw.js             Service worker (offline shell)
+│   ├── icon-192.svg      App icon
+│   └── icon-512.svg      App icon
 └── package.json
 ```
 
@@ -94,12 +96,19 @@ Vaelos/
 | POST   | `/api/trips/:id/complete`         | ✔    | Complete trip                         |
 | GET    | `/api/kpis`                       | ✔    | Dashboard KPIs                        |
 | GET    | `/api/metrics`                    | ✔    | Per-vehicle efficiency / ROI          |
-| GET    | `/api/audit?limit=200`            | ✔    | Audit log timeline                    |
+| GET    | `/api/audit?limit=200`            | ✔    | Audit log timeline (Owner Only)       |
 | GET    | `/api/predictive-maintenance`     | ✔    | Risk scoring                          |
 | GET    | `/api/leaderboard`                | ✔    | Driver ranking                        |
 | POST   | `/api/ai`                         | ✔    | `{ question: "..." }` → natural-language answer |
 
 WebSocket: connect to `/ws` for live mutation broadcasts.
+
+---
+
+## 🛡️ Security
+- **Owner-Only Access**: Critical administrative functions (User Management, Audit Logs) are locked exclusively to the owner's email.
+- **Role-Based Access Control (RBAC)**: Strict separation of capabilities between Admin and Driver roles.
+- **Secure Auth**: JWT stored in httpOnly cookies to prevent XSS.
 
 ---
 

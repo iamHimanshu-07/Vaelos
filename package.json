@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "releaseName": "Vaelos v1.0 — Admin & Driver",
   "description": "Smart Transport Operations Platform",
-  "main": "server.js",
+  "main": "api/index.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node server.js",
+    "start": "node api/index.js",
     "init-db": "node database.js",
     "test": "node test_business_rules.js"
   },
