@@ -14,13 +14,14 @@
     "node": "24.x"
   },
   "dependencies": {
-    "pg": "^8.13.0",
+    "@vercel/config": "^0.7.0",
     "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.7",
     "express": "^4.21.0",
     "jsonwebtoken": "^9.0.2",
-    "cookie-parser": "^1.4.7",
-    "ws": "^8.18.0",
-    "resend": "^4.0.0"
+    "pg": "^8.13.0",
+    "resend": "^4.0.0",
+    "ws": "^8.18.0"
   },
   "repository": {
     "type": "git",
