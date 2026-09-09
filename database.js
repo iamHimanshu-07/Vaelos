@@ -313,7 +313,6 @@ async function seed() {
   );
   const tripId = tripRes.rows[0].id;
 
-  // In the original code, this trip was created as 'Completed' for seeding purposes
   await pool.query(
     `UPDATE trips SET start_odometer=$1, end_odometer=$2, fuel_used_liters=$3, revenue=$4, dispatched_at=$5, completed_at=$6 WHERE id=$7`,
     [12000, 12180, 22.5, 12500, dispAt, compAt, tripId]
