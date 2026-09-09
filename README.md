@@ -134,3 +134,9 @@ Risk = High (≥ 60) / Medium (≥ 30) / Low.
 ## 📜 License
 
 Apache 2.0 — see [LICENSE](./LICENSE).
+
+---
+
+## Credits
+
+Built by [Himanshu Singh Yadav](https://github.com/iamHimanshu-07).
