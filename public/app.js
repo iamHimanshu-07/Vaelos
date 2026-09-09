@@ -1119,9 +1119,10 @@ async function renderMap(c) {
     attributionControl: false,
   }).setView([22.5937, 78.9629], 5);
 
-  // Light, road-style tiles — closest free aesthetic to Google Maps.
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  // Professional Dark Command Center tiles.
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
     maxZoom: 19,
+    attribution: '&copy; OpenStreetMap &copy; CARTO'
   }).addTo(state.map);
 
   // Move the zoom control to the right side, like Google Maps.
@@ -1163,11 +1164,16 @@ async function renderMap(c) {
     });
   }
 
+  const cluster = L.markerClusterGroup({
+    showCoverageOnHover: false,
+    spiderfyOnMaxZoom: true,
+  });
+
   state.mapMarkers = [];
   for (const v of vehicles) {
     const base = coordsForPlace(v.region, v.region);
     const [lat, lng] = jitter(base, v.reg_no + v.id, v.region);
-    const m = L.marker([lat, lng], { icon: iconFor(v), riseOnHover: true }).addTo(state.map);
+    const m = L.marker([lat, lng], { icon: iconFor(v), riseOnHover: true });
     const cur = Number(v.current_load_kg || 0);
     const max = Number(v.max_load_kg || 0);
     const pct = max > 0 ? Math.min(100, Math.round((cur / max) * 100)) : 0;
@@ -1183,8 +1189,10 @@ async function renderMap(c) {
         ${overCap ? '<div class="gm-pop-warn">⚠ Over capacity</div>' : ''}
       </div>
     `, { className: 'gm-popup', maxWidth: 280, minWidth: 240 });
+    cluster.addLayer(m);
     state.mapMarkers.push(m);
   }
+  state.map.addLayer(cluster);
 
   // Draw route polylines only when both endpoints resolve to a known city.
   for (const t of trips) {
