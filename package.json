@@ -11,10 +11,10 @@
     "test": "node test_business_rules.js"
   },
   "engines": {
-    "node": "20.x"
+    "node": "24.x"
   },
   "dependencies": {
-    "better-sqlite3": "^11.5.0",
+    "pg": "^8.13.0",
     "bcryptjs": "^2.4.3",
     "express": "^4.21.0",
     "jsonwebtoken": "^9.0.2",

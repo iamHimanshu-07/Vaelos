@@ -9,7 +9,7 @@ const cookieParser = require('cookie-parser');
 const jwt = require('jsonwebtoken');
 const { WebSocketServer } = require('ws');
 
-const { init, verifyUser, recomputeLicenseNotifications, db,
+const { init, verifyUser, recomputeLicenseNotifications, pool,
         isDemoEmail, ensureDemoClone } = require('./database');
 const ops = require('./operations');
 const { notifyOwner } = require('./notify');
@@ -18,14 +18,18 @@ console.log('[vaelos] booting…');
 console.log(`[vaelos] node ${process.version} | pid ${process.pid} | cwd ${process.cwd()}`);
 console.log(`[vaelos] env PORT=${process.env.PORT || '(unset)'} | NODE_ENV=${process.env.NODE_ENV || '(unset)'}`);
 
-try {
-  init();
-  recomputeLicenseNotifications();
-  console.log('[vaelos] database initialised ok');
-} catch (err) {
-  console.error('[vaelos] FATAL: database init failed:', err && err.stack || err);
-  process.exit(1);
+async function boot() {
+  try {
+    await init();
+    await recomputeLicenseNotifications();
+    console.log('[vaelos] database initialised ok');
+  } catch (err) {
+    console.error('[vaelos] FATAL: database init failed:', err && err.stack || err);
+    process.exit(1);
+  }
 }
+
+boot();
 
 const app = express();
 app.use(express.json());
@@ -77,15 +81,15 @@ function rateLimit(key, max = 5, windowMs = 60_000) {
   return arr.length <= max;
 }
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) return res.status(400).json({ error: 'Email & password required' });
   if (!rateLimit('login:' + email.toLowerCase())) return res.status(429).json({ error: 'Too many attempts. Try again in a minute.' });
-  const user = verifyUser(email, password);
+  const user = await verifyUser(email, password);
   if (!user) return res.status(401).json({ error: 'Invalid email or password' });
   // For demo accounts, ensure an isolated clone exists for this email before
   // the very first read so the workspace is ready.
-  if (isDemoEmail(user.email)) ensureDemoClone(user.email);
+  if (isDemoEmail(user.email)) await ensureDemoClone(user.email);
   const token = jwt.sign(
     { id: user.id, email: user.email, name: user.name, role: user.role },
     JWT_SECRET, { expiresIn: '12h' }
@@ -98,21 +102,20 @@ app.post('/api/auth/login', (req, res) => {
     ip: req.ip, ua: req.headers['user-agent'],
   }).catch(() => {});
 });
-app.post('/api/auth/signup', (req, res) => {
+app.post('/api/auth/signup', async (req, res) => {
   const { name, email, password, role } = req.body || {};
   if (!name || !email || !password) return res.status(400).json({ error: 'Name, email, and password are required.' });
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Invalid email address.' });
   if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters.' });
   if (!rateLimit('signup:' + email.toLowerCase(), 3, 5 * 60_000)) return res.status(429).json({ error: 'Too many signup attempts. Try again in 5 minutes.' });
   // First-ever user becomes Admin; everyone else is Driver by default.
-  const existing = ops.listUsers();
+  const existing = await ops.listUsers();
   const finalRole = (existing.length === 0) ? 'Admin'
                   : (['Driver','Admin'].includes(role) ? role : 'Driver');
   try {
-    ops.addUser({ user: null }, { name: name.trim(), email: email.trim().toLowerCase(), password, role: finalRole });
-    const created = require('./database').db.prepare(
-      'SELECT id, name, email, role FROM users WHERE email = ?'
-    ).get(email.trim().toLowerCase());
+    await ops.addUser(ctx(req), { name: name.trim(), email: email.trim().toLowerCase(), password, role: finalRole });
+    const res = await pool.query('SELECT id, name, email, role FROM users WHERE email = $1', [email.trim().toLowerCase()]);
+    const created = res.rows[0];
     res.json({ ok: true, user: created });
     notifyOwner('signup', {
       name, email: email.trim().toLowerCase(), role: finalRole,
@@ -126,8 +129,6 @@ app.post('/api/auth/signup', (req, res) => {
   }
 });
 app.post('/api/auth/forgot', (req, res) => {
-  // Demo-mode: no email infra, so we always 200 and tell the client
-  // to use the demo accounts or ask an Admin to reset.
   return res.json({ ok: true, message: 'If an account exists for that email, a reset link will be sent. (Demo mode: contact an Admin.)' });
 });
 app.post('/api/auth/logout', (req, res) => {
@@ -136,139 +137,137 @@ app.post('/api/auth/logout', (req, res) => {
 app.get('/api/auth/me', authRequired, (req, res) => res.json({ user: req.user }));
 
 // ----------------------------- USERS ----------------------------- //
-app.get('/api/users', authRequired, requireRole('Admin'), (req, res) =>
-  res.json(ops.listUsers()));
-app.post('/api/users', authRequired, requireRole('Admin'), (req, res) => {
-  try { ops.addUser(ctx(req), req.body); broadcast('user.create'); res.json({ ok: true }); }
+app.get('/api/users', authRequired, requireRole('Admin'), async (req, res) =>
+  res.json(await ops.listUsers()));
+app.post('/api/users', authRequired, requireRole('Admin'), async (req, res) => {
+  try { await ops.addUser(ctx(req), req.body); broadcast('user.create'); res.json({ ok: true }); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
-app.delete('/api/users/:id', authRequired, requireRole('Admin'), (req, res) => {
-  ops.deleteUser(ctx(req), +req.params.id); broadcast('user.delete'); res.json({ ok: true });
+app.delete('/api/users/:id', authRequired, requireRole('Admin'), async (req, res) => {
+  await ops.deleteUser(ctx(req), +req.params.id); broadcast('user.delete'); res.json({ ok: true });
 });
 
 // ----------------------------- VEHICLES ----------------------------- //
-app.get('/api/vehicles', authRequired, (req, res) => res.json(ops.listVehicles(req.query, req.user.email)));
-app.get('/api/vehicles/:id', authRequired, (req, res) => {
-  const v = ops.getVehicle(+req.params.id);
+app.get('/api/vehicles', authRequired, async (req, res) => res.json(await ops.listVehicles(req.query, req.user.email)));
+app.get('/api/vehicles/:id', authRequired, async (req, res) => {
+  const v = await ops.getVehicle(+req.params.id);
   if (!v) return res.status(404).json({ error: 'Not found' });
   res.json(v);
 });
-app.post('/api/vehicles', authRequired, (req, res) => {
-  try { ops.addVehicle(ctx(req), req.body); broadcast('vehicle.create'); res.json({ ok: true }); }
+app.post('/api/vehicles', authRequired, async (req, res) => {
+  try { await ops.addVehicle(ctx(req), req.body); broadcast('vehicle.create'); res.json({ ok: true }); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
-app.put('/api/vehicles/:id', authRequired, (req, res) => {
-  try { ops.updateVehicle(ctx(req), +req.params.id, req.body); broadcast('vehicle.update'); res.json({ ok: true }); }
+app.put('/api/vehicles/:id', authRequired, async (req, res) => {
+  try { await ops.updateVehicle(ctx(req), +req.params.id, req.body); broadcast('vehicle.update'); res.json({ ok: true }); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
-app.delete('/api/vehicles/:id', authRequired, (req, res) => {
-  try { ops.deleteVehicle(ctx(req), +req.params.id); broadcast('vehicle.delete'); res.json({ ok: true }); }
+app.delete('/api/vehicles/:id', authRequired, async (req, res) => {
+  try { await ops.deleteVehicle(ctx(req), +req.params.id); broadcast('vehicle.delete'); res.json({ ok: true }); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 // ----------------------------- DRIVERS ----------------------------- //
-app.get('/api/drivers', authRequired, (req, res) => res.json(ops.listDrivers(req.query, req.user.email)));
-app.get('/api/drivers/:id', authRequired, (req, res) => {
-  const d = ops.getDriver(+req.params.id);
+app.get('/api/drivers', authRequired, async (req, res) => res.json(await ops.listDrivers(req.query, req.user.email)));
+app.get('/api/drivers/:id', authRequired, async (req, res) => {
+  const d = await ops.getDriver(+req.params.id);
   if (!d) return res.status(404).json({ error: 'Not found' });
   res.json(d);
 });
-app.post('/api/drivers', authRequired, (req, res) => {
-  try { ops.addDriver(ctx(req), req.body); broadcast('driver.create'); res.json({ ok: true }); }
+app.post('/api/drivers', authRequired, async (req, res) => {
+  try { await ops.addDriver(ctx(req), req.body); broadcast('driver.create'); res.json({ ok: true }); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
-app.put('/api/drivers/:id', authRequired, (req, res) => {
-  try { ops.updateDriver(ctx(req), +req.params.id, req.body); broadcast('driver.update'); res.json({ ok: true }); }
+app.put('/api/drivers/:id', authRequired, async (req, res) => {
+  try { await ops.updateDriver(ctx(req), +req.params.id, req.body); broadcast('driver.update'); res.json({ ok: true }); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
-app.delete('/api/drivers/:id', authRequired, (req, res) => {
-  try { ops.deleteDriver(ctx(req), +req.params.id); broadcast('driver.delete'); res.json({ ok: true }); }
+app.delete('/api/drivers/:id', authRequired, async (req, res) => {
+  try { await ops.deleteDriver(ctx(req), +req.params.id); broadcast('driver.delete'); res.json({ ok: true }); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 // ----------------------------- TRIPS ----------------------------- //
-app.get('/api/trips', authRequired, (req, res) => res.json(ops.listTrips(req.query, req.user.email)));
-app.post('/api/trips', authRequired, (req, res) => {
-  const [ok, msg] = ops.createTrip(ctx(req), req.body);
+app.get('/api/trips', authRequired, async (req, res) => res.json(await ops.listTrips(req.query, req.user.email)));
+app.post('/api/trips', authRequired, async (req, res) => {
+  const [ok, msg] = await ops.createTrip(ctx(req), req.body);
   if (!ok) return res.status(400).json({ error: msg });
   broadcast('trip.create'); res.json({ ok: true, message: msg });
 });
-app.post('/api/trips/:id/dispatch', authRequired, (req, res) => {
-  const [ok, msg] = ops.dispatchTrip(ctx(req), +req.params.id);
+app.post('/api/trips/:id/dispatch', authRequired, async (req, res) => {
+  const [ok, msg] = await ops.dispatchTrip(ctx(req), +req.params.id);
   if (!ok) return res.status(400).json({ error: msg });
   broadcast('trip.dispatch'); res.json({ ok: true, message: msg });
 });
-app.post('/api/trips/:id/complete', authRequired, (req, res) => {
-  const [ok, msg] = ops.completeTrip(ctx(req), +req.params.id, req.body);
+app.post('/api/trips/:id/complete', authRequired, async (req, res) => {
+  const [ok, msg] = await ops.completeTrip(ctx(req), +req.params.id, req.body);
   if (!ok) return res.status(400).json({ error: msg });
   broadcast('trip.complete'); res.json({ ok: true, message: msg });
 });
-app.post('/api/trips/:id/cancel', authRequired, (req, res) => {
-  const [ok, msg] = ops.cancelTrip(ctx(req), +req.params.id);
+app.post('/api/trips/:id/cancel', authRequired, async (req, res) => {
+  const [ok, msg] = await ops.cancelTrip(ctx(req), +req.params.id);
   if (!ok) return res.status(400).json({ error: msg });
   broadcast('trip.cancel'); res.json({ ok: true, message: msg });
 });
 
 // ----------------------------- MAINTENANCE ----------------------------- //
-app.get('/api/maintenance', authRequired, (req, res) =>
-  res.json(ops.listMaintenance(req.query.vehicle_id ? +req.query.vehicle_id : null, req.user.email)));
-app.post('/api/maintenance', authRequired, (req, res) => {
-  const [ok, msg] = ops.createMaintenance(ctx(req), req.body);
+app.get('/api/maintenance', authRequired, async (req, res) =>
+  res.json(await ops.listMaintenance(req.query.vehicle_id ? +req.query.vehicle_id : null, req.user.email)));
+app.post('/api/maintenance', authRequired, async (req, res) => {
+  const [ok, msg] = await ops.createMaintenance(ctx(req), req.body);
   if (!ok) return res.status(400).json({ error: msg });
   broadcast('maintenance.create'); res.json({ ok: true, message: msg });
 });
-app.post('/api/maintenance/:id/close', authRequired, (req, res) => {
-  const [ok, msg] = ops.closeMaintenance(ctx(req), +req.params.id);
+app.post('/api/maintenance/:id/close', authRequired, async (req, res) => {
+  const [ok, msg] = await ops.closeMaintenance(ctx(req), +req.params.id);
   if (!ok) return res.status(400).json({ error: msg });
   broadcast('maintenance.close'); res.json({ ok: true, message: msg });
 });
-app.delete('/api/maintenance/:id', authRequired, (req, res) => {
-  ops.deleteMaintenance(ctx(req), +req.params.id); res.json({ ok: true });
+app.delete('/api/maintenance/:id', authRequired, async (req, res) => {
+  await ops.deleteMaintenance(ctx(req), +req.params.id); res.json({ ok: true });
 });
 
 // ----------------------------- FUEL & EXPENSES ----------------------------- //
-app.get('/api/fuel', authRequired, (req, res) =>
-  res.json(ops.listFuel(req.query.vehicle_id ? +req.query.vehicle_id : null, req.user.email)));
-app.post('/api/fuel', authRequired, (req, res) => {
-  const [ok, msg] = ops.addFuel(ctx(req), req.body);
+app.get('/api/fuel', authRequired, async (req, res) =>
+  res.json(await ops.listFuel(req.query.vehicle_id ? +req.query.vehicle_id : null, req.user.email)));
+app.post('/api/fuel', authRequired, async (req, res) => {
+  const [ok, msg] = await ops.addFuel(ctx(req), req.body);
   if (!ok) return res.status(403).json({ error: msg });
   res.json({ ok: true, message: msg });
 });
-app.get('/api/expenses', authRequired, (req, res) =>
-  res.json(ops.listExpenses(req.query.vehicle_id ? +req.query.vehicle_id : null, req.user.email)));
-app.post('/api/expenses', authRequired, (req, res) => {
-  const [ok, msg] = ops.addExpense(ctx(req), req.body);
+app.get('/api/expenses', authRequired, async (req, res) =>
+  res.json(await ops.listExpenses(req.query.vehicle_id ? +req.query.vehicle_id : null, req.user.email)));
+app.post('/api/expenses', authRequired, async (req, res) => {
+  const [ok, msg] = await ops.addExpense(ctx(req), req.body);
   if (!ok) return res.status(403).json({ error: msg });
   res.json({ ok: true, message: msg });
 });
 
 // ----------------------------- ANALYTICS & EXTRA ----------------------------- //
-app.get('/api/kpis', authRequired, (req, res) => res.json(ops.dashboardKpis(req.user.email)));
-app.get('/api/metrics', authRequired, (req, res) => res.json(ops.vehicleMetrics(req.user.email)));
-app.get('/api/notifications', authRequired, (req, res) =>
-  res.json(ops.listNotifications(req.user.email)));
-app.post('/api/notifications/read-all', authRequired, (req, res) => {
-  ops.markAllNotificationsRead(req.user.email); res.json({ ok: true });
+app.get('/api/kpis', authRequired, async (req, res) => res.json(await ops.dashboardKpis(req.user.email)));
+app.get('/api/metrics', authRequired, async (req, res) => res.json(await ops.vehicleMetrics(req.user.email)));
+app.get('/api/notifications', authRequired, async (req, res) =>
+  res.json(await ops.listNotifications(req.user.email)));
+app.post('/api/notifications/read-all', authRequired, async (req, res) => {
+  await ops.markAllNotificationsRead(req.user.email); res.json({ ok: true });
 });
-app.get('/api/audit', authRequired, (req, res) => {
-  // Everyone (including the owner) sees only their own actions by default.
-  // Only itshimanshu666@gmail.com can flip to global via ?scope=all.
+app.get('/api/audit', authRequired, async (req, res) => {
   const wantAll = String(req.query.scope || '').toLowerCase() === 'all';
   const isOwner = String(req.user.email || '').toLowerCase() === 'itshimanshu666@gmail.com';
   const scope = (wantAll && isOwner) ? 'all' : 'me';
   try {
-    const rows = ops.listAudit(+req.query.limit || 100, { scope, actorEmail: req.user.email });
+    const rows = await ops.listAudit(+req.query.limit || 100, { scope, actorEmail: req.user.email });
     res.json(Array.isArray(rows) ? rows : []);
   } catch (e) {
     console.error('[vaelos] /api/audit failed:', e && e.message || e);
     res.status(500).json({ error: 'Failed to load audit log' });
   }
 });
-app.get('/api/predictive-maintenance', authRequired, (req, res) =>
-  res.json(ops.predictiveMaintenance(req.user.email)));
-app.get('/api/leaderboard', authRequired, (req, res) =>
-  res.json(ops.driverLeaderboard(req.user.email)));
-app.get('/api/search', authRequired, (req, res) => {
+app.get('/api/predictive-maintenance', authRequired, async (req, res) =>
+  res.json(await ops.predictiveMaintenance(req.user.email)));
+app.get('/api/leaderboard', authRequired, async (req, res) =>
+  res.json(await ops.driverLeaderboard(req.user.email)));
+app.get('/api/search', authRequired, async (req, res) => {
   const q = String(req.query.q || '').trim().toLowerCase();
   if (!q) return res.json({ vehicles: [], drivers: [], trips: [], maintenance: [] });
   const score = (val) => {
@@ -286,19 +285,17 @@ app.get('/api/search', authRequired, (req, res) => {
     .slice(0, 10)
     .map(x => x.item);
   res.json({
-    vehicles:     top(ops.listVehicles({},     req.user.email), ['reg_no', 'name', 'type', 'region', 'status']),
-    drivers:      top(ops.listDrivers({},      req.user.email), ['name', 'license_no', 'contact', 'license_category', 'status']),
-    trips:        top(ops.listTrips({},        req.user.email), ['id', 'source', 'destination', 'vehicle_reg', 'driver_name', 'status']),
-    maintenance:  top(ops.listMaintenance(null, req.user.email), ['vehicle_reg', 'description', 'notes', 'status']),
+    vehicles:     top(await ops.listVehicles({},     req.user.email), ['reg_no', 'name', 'type', 'region', 'status']),
+    drivers:      top(await ops.listDrivers({},      req.user.email), ['name', 'license_no', 'contact', 'license_category', 'status']),
+    trips:        top(await ops.listTrips({},        req.user.email), ['id', 'source', 'destination', 'vehicle_reg', 'driver_name', 'status']),
+    maintenance:  top(await ops.listMaintenance(null, req.user.email), ['vehicle_reg', 'description', 'notes', 'status']),
   });
 });
-app.post('/api/ai', authRequired, (req, res) => {
+app.post('/api/ai', authRequired, async (req, res) => {
   const { question } = req.body || {};
-  res.json(ops.aiAsk(question));
+  res.json(await ops.aiAsk(question));
 });
 
-// Build info — version + uptime so healthchecks and the login screen can
-// show the running release name without round-tripping to package.json.
 const APP_VERSION = require('./package.json').version;
 const RELEASE_NAME = require('./package.json').releaseName || `Vaelos v${APP_VERSION}`;
 app.get('/api/build', (_req, res) => res.json({
@@ -308,22 +305,18 @@ app.get('/api/build', (_req, res) => res.json({
   started: new Date(Date.now() - Math.floor(process.uptime() * 1000)).toISOString(),
 }));
 
-// ----------------------------- Static frontend ----------------------------- //
-// Liveness probe — registered BEFORE static middleware so Railway's
-// healthcheck always gets a 200 even if index.html is mid-rebuild.
 app.get('/health', (_req, res) => {
   res.status(200).json({ ok: true, ts: Date.now() });
 });
 app.get('/healthz', (_req, res) => {
   res.status(200).end();
 });
-// Public counters used by the login screen (no auth, no PII).
-app.get('/api/health-stats', (_req, res) => {
+app.get('/api/health-stats', async (_req, res) => {
   try {
-    const vehicles = db.prepare('SELECT COUNT(*) c FROM vehicles').get().c;
-    const trips    = db.prepare('SELECT COUNT(*) c FROM trips').get().c;
-    const drivers  = db.prepare('SELECT COUNT(*) c FROM drivers').get().c;
-    res.json({ vehicles, trips, drivers });
+    const vRes = await pool.query('SELECT COUNT(*) c FROM vehicles');
+    const tRes = await pool.query('SELECT COUNT(*) c FROM trips');
+    const dRes = await pool.query('SELECT COUNT(*) c FROM drivers');
+    res.json({ vehicles: vRes.rows[0].c, trips: tRes.rows[0].c, drivers: dRes.rows[0].c });
   } catch (e) {
     res.json({ vehicles: 0, trips: 0, drivers: 0 });
   }
@@ -335,8 +328,6 @@ app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.ht
 const PORT = process.env.PORT || 3000;
 const server = http.createServer(app);
 
-// WebSocket server for live updates — wrapped so a WS init error can't
-// take down the whole HTTP server (Railway healthcheck relies on HTTP).
 let wss = null;
 try {
   wss = new WebSocketServer({ server, path: '/ws' });

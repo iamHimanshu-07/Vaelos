@@ -3,17 +3,15 @@
  * Sends signup/login alerts to the owner (itshimanshu666@gmail.com).
  * Transport priority:
  *   1) Resend (if RESEND_API_KEY is set)
- *   2) Fallback: append to ./outbox.log + console.log (for local dev)
+ *   2) Fallback: console.log
  * The transport never throws — notifications are best-effort and must not
  * block signups or logins. Passwords are never accepted into the payload.
  */
-const fs = require('fs');
 const path = require('path');
 
 const OWNER_EMAIL = process.env.OWNER_EMAIL || 'itshimanshu666@gmail.com';
 const RESEND_KEY = process.env.RESEND_API_KEY;
 const FROM_ADDR = process.env.VAELOS_FROM || 'Vaelos Alerts <alerts@vaelos.app>';
-const OUTBOX = path.join(__dirname, 'outbox.log');
 
 let Resend = null;
 if (RESEND_KEY) {
@@ -28,9 +26,7 @@ function isDemoEmail(email) {
 }
 
 function fallbackLog(kind, body) {
-  const line = `[${new Date().toISOString()}] ${kind} ${JSON.stringify(body)}\n`;
-  try { fs.appendFileSync(OUTBOX, line); } catch (_) { /* best effort */ }
-  console.log('[vaelos][notify]', line.trim());
+  console.log('[vaelos][notify] FALLBACK:', `[${new Date().toISOString()}] ${kind} ${JSON.stringify(body)}`);
 }
 
 async function sendViaResend(kind, body) {
@@ -56,7 +52,6 @@ async function sendViaResend(kind, body) {
  * Returns { sent: 'resend' | 'fallback', skipped?: boolean }.
  */
 async function notifyOwner(kind, payload = {}) {
-  // Defence in depth: drop any password field even if a future caller forgets.
   const safe = { ...payload };
   delete safe.password;
   delete safe.pass;

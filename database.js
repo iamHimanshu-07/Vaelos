@@ -1,266 +1,163 @@
 /**
- * Vaelos - Database layer (better-sqlite3)
+ * Vaelos - Database layer (pg / PostgreSQL)
  * Schema, auth helpers, and seed data.
  */
-const path = require('path');
-const fs = require('fs');
+const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
-const Database = require('better-sqlite3');
 
-// On Railway (and other PaaS), persistent disk is only available under a
-// mounted Volume. If VAELOS_DB is set explicitly, honour it. Otherwise try a
-// list of likely Volume mount points in order, and fall back to the working
-// directory so local dev / first deploy without a volume still works.
-function resolveDbPath() {
-  if (process.env.VAELOS_DB) return process.env.VAELOS_DB;
-  const candidates = [
-    '/data/vaelos.db',
-    '/app/data/vaelos.db',
-    '/mnt/vaelos.db',
-    path.join(__dirname, 'vaelos.db'),
-  ];
-  for (const p of candidates) {
-    try {
-      const dir = path.dirname(p);
-      // Make sure the parent dir exists (Railway mounts /data as an empty
-      // directory on first boot — we need to write into it immediately).
-      fs.mkdirSync(dir, { recursive: true });
-      // Verify we can write (Railway volumes are writable, project dir on
-      // Railway's runtime image may be read-only — this filters both).
-      fs.accessSync(dir, fs.constants.W_OK);
-      return p;
-    } catch (_) { /* try next */ }
-  }
-  return path.join(__dirname, 'vaelos.db');
-}
+// Use DATABASE_URL from environment (Neon / Vercel)
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+});
 
-const DB_PATH = resolveDbPath();
-console.log(`[vaelos] using database at ${DB_PATH}`);
-
-let db;
-try {
-  db = new Database(DB_PATH);
-} catch (err) {
-  // Last-resort fallback: use /tmp which is always writable on Linux.
-  // Not persistent across redeploys, but keeps the app alive so the user
-  // can at least see a working dashboard while debugging the volume.
-  const fallback = '/tmp/vaelos.db';
-  console.error(`[vaelos] FATAL: cannot open ${DB_PATH}: ${err.message}`);
-  console.error(`[vaelos] falling back to ephemeral ${fallback}`);
+async function init() {
+  const client = await pool.connect();
   try {
-    fs.mkdirSync('/tmp', { recursive: true });
-    db = new Database(fallback);
-  } catch (err2) {
-    console.error(`[vaelos] FATAL: even /tmp failed: ${err2.message}`);
-    throw err2;
-  }
-}
+    await client.query('BEGIN');
 
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL CHECK (role IN ('Admin','Driver')),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        driver_id INTEGER
+      );
 
-function init() {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      email TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      role TEXT NOT NULL CHECK (role IN ('Admin','Driver')),
-      created_at TEXT NOT NULL
-    );
+      CREATE TABLE IF NOT EXISTS vehicles (
+        id SERIAL PRIMARY KEY,
+        reg_no TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
+        type TEXT NOT NULL,
+        max_load_kg DOUBLE PRECISION NOT NULL,
+        odometer_km DOUBLE PRECISION NOT NULL DEFAULT 0,
+        acquisition_cost DOUBLE PRECISION NOT NULL DEFAULT 0,
+        region TEXT DEFAULT 'Central',
+        status TEXT NOT NULL DEFAULT 'Available' CHECK (status IN ('Available','On Trip','In Shop','Retired')),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        _demo_owner TEXT
+      );
 
-    CREATE TABLE IF NOT EXISTS vehicles (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      reg_no TEXT UNIQUE NOT NULL,
-      name TEXT NOT NULL,
-      type TEXT NOT NULL,
-      max_load_kg REAL NOT NULL,
-      odometer_km REAL NOT NULL DEFAULT 0,
-      acquisition_cost REAL NOT NULL DEFAULT 0,
-      region TEXT DEFAULT 'Central',
-      status TEXT NOT NULL DEFAULT 'Available' CHECK (status IN ('Available','On Trip','In Shop','Retired')),
-      created_at TEXT NOT NULL
-    );
+      CREATE TABLE IF NOT EXISTS drivers (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        license_no TEXT UNIQUE NOT NULL,
+        license_category TEXT NOT NULL,
+        license_expiry DATE NOT NULL,
+        contact TEXT NOT NULL,
+        safety_score DOUBLE PRECISION NOT NULL DEFAULT 80.0,
+        status TEXT NOT NULL DEFAULT 'Available' CHECK (status IN ('Available','On Trip','Off Duty','Suspended')),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        _demo_owner TEXT
+      );
 
-    CREATE TABLE IF NOT EXISTS drivers (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      license_no TEXT UNIQUE NOT NULL,
-      license_category TEXT NOT NULL,
-      license_expiry TEXT NOT NULL,
-      contact TEXT NOT NULL,
-      safety_score REAL NOT NULL DEFAULT 80.0,
-      status TEXT NOT NULL DEFAULT 'Available' CHECK (status IN ('Available','On Trip','Off Duty','Suspended')),
-      created_at TEXT NOT NULL
-    );
+      CREATE TABLE IF NOT EXISTS trips (
+        id SERIAL PRIMARY KEY,
+        source TEXT NOT NULL,
+        destination TEXT NOT NULL,
+        vehicle_id INTEGER NOT NULL REFERENCES vehicles(id),
+        driver_id INTEGER NOT NULL REFERENCES drivers(id),
+        cargo_kg DOUBLE PRECISION NOT NULL,
+        planned_distance_km DOUBLE PRECISION NOT NULL,
+        status TEXT NOT NULL DEFAULT 'Draft' CHECK (status IN ('Draft','Dispatched','Completed','Cancelled')),
+        start_odometer DOUBLE PRECISION,
+        end_odometer DOUBLE PRECISION,
+        fuel_used_liters DOUBLE PRECISION,
+        revenue DOUBLE PRECISION DEFAULT 0,
+        dispatched_at TIMESTAMP WITH TIME ZONE,
+        completed_at TIMESTAMP WITH TIME ZONE,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        _demo_owner TEXT
+      );
 
-    CREATE TABLE IF NOT EXISTS trips (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      source TEXT NOT NULL,
-      destination TEXT NOT NULL,
-      vehicle_id INTEGER NOT NULL,
-      driver_id INTEGER NOT NULL,
-      cargo_kg REAL NOT NULL,
-      planned_distance_km REAL NOT NULL,
-      status TEXT NOT NULL DEFAULT 'Draft' CHECK (status IN ('Draft','Dispatched','Completed','Cancelled')),
-      start_odometer REAL,
-      end_odometer REAL,
-      fuel_used_liters REAL,
-      revenue REAL DEFAULT 0,
-      dispatched_at TEXT,
-      completed_at TEXT,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY (vehicle_id) REFERENCES vehicles(id),
-      FOREIGN KEY (driver_id) REFERENCES drivers(id)
-    );
+      CREATE TABLE IF NOT EXISTS maintenance (
+        id SERIAL PRIMARY KEY,
+        vehicle_id INTEGER NOT NULL REFERENCES vehicles(id),
+        description TEXT NOT NULL,
+        cost DOUBLE PRECISION NOT NULL DEFAULT 0,
+        start_date DATE NOT NULL,
+        end_date DATE,
+        status TEXT NOT NULL DEFAULT 'Open' CHECK (status IN ('Open','Closed')),
+        notes TEXT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        _demo_owner TEXT
+      );
 
-    CREATE TABLE IF NOT EXISTS maintenance (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      vehicle_id INTEGER NOT NULL,
-      description TEXT NOT NULL,
-      cost REAL NOT NULL DEFAULT 0,
-      start_date TEXT NOT NULL,
-      end_date TEXT,
-      status TEXT NOT NULL DEFAULT 'Open' CHECK (status IN ('Open','Closed')),
-      notes TEXT,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY (vehicle_id) REFERENCES vehicles(id)
-    );
+      CREATE TABLE IF NOT EXISTS fuel_logs (
+        id SERIAL PRIMARY KEY,
+        vehicle_id INTEGER NOT NULL REFERENCES vehicles(id),
+        trip_id INTEGER REFERENCES trips(id),
+        liters DOUBLE PRECISION NOT NULL,
+        cost DOUBLE PRECISION NOT NULL,
+        log_date DATE NOT NULL,
+        odometer_km DOUBLE PRECISION,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        _demo_owner TEXT
+      );
 
-    CREATE TABLE IF NOT EXISTS fuel_logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      vehicle_id INTEGER NOT NULL,
-      trip_id INTEGER,
-      liters REAL NOT NULL,
-      cost REAL NOT NULL,
-      log_date TEXT NOT NULL,
-      odometer_km REAL,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY (vehicle_id) REFERENCES vehicles(id),
-      FOREIGN KEY (trip_id) REFERENCES trips(id)
-    );
+      CREATE TABLE IF NOT EXISTS expenses (
+        id SERIAL PRIMARY KEY,
+        vehicle_id INTEGER REFERENCES vehicles(id),
+        trip_id INTEGER REFERENCES trips(id),
+        category TEXT NOT NULL,
+        description TEXT,
+        amount DOUBLE PRECISION NOT NULL,
+        expense_date DATE NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        _demo_owner TEXT
+      );
 
-    CREATE TABLE IF NOT EXISTS expenses (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      vehicle_id INTEGER,
-      trip_id INTEGER,
-      category TEXT NOT NULL,
-      description TEXT,
-      amount REAL NOT NULL,
-      expense_date TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY (vehicle_id) REFERENCES vehicles(id),
-      FOREIGN KEY (trip_id) REFERENCES trips(id)
-    );
+      CREATE TABLE IF NOT EXISTS notifications (
+        id SERIAL PRIMARY KEY,
+        kind TEXT NOT NULL,
+        message TEXT NOT NULL,
+        target_id INTEGER,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        read INTEGER NOT NULL DEFAULT 0,
+        _demo_owner TEXT
+      );
 
-    CREATE TABLE IF NOT EXISTS notifications (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      kind TEXT NOT NULL,
-      message TEXT NOT NULL,
-      target_id INTEGER,
-      created_at TEXT NOT NULL,
-      read INTEGER NOT NULL DEFAULT 0,
-      _demo_owner TEXT
-    );
+      CREATE TABLE IF NOT EXISTS audit_log (
+        id SERIAL PRIMARY KEY,
+        actor_id INTEGER,
+        actor_name TEXT,
+        actor_email TEXT,
+        entity TEXT NOT NULL,
+        entity_id INTEGER,
+        action TEXT NOT NULL,
+        message TEXT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
 
-    CREATE TABLE IF NOT EXISTS audit_log (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      actor_id INTEGER,
-      actor_name TEXT,
-      actor_email TEXT,
-      entity TEXT NOT NULL,
-      entity_id INTEGER,
-      action TEXT NOT NULL,
-      message TEXT,
-      created_at TEXT NOT NULL
-    );
+      CREATE TABLE IF NOT EXISTS demo_sessions (
+        email TEXT PRIMARY KEY,
+        scope TEXT NOT NULL CHECK (scope IN ('admin','driver','safety','finance')),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
 
-    -- Demo isolation: each demo login gets its own starter-fleet clone.
-    -- Rows in vehicles/drivers/trips/fuel_logs/expenses/maintenance carry
-    -- _demo_owner = NULL for real data, or the demo user's email when the
-    -- row belongs to that user's ephemeral workspace.
-    CREATE TABLE IF NOT EXISTS demo_sessions (
-      email TEXT PRIMARY KEY,
-      scope TEXT NOT NULL CHECK (scope IN ('admin','driver','safety','finance')),
-      created_at TEXT NOT NULL
-    );
-  `);
-
-  // Idempotent column adds for older DBs.
-  for (const stmt of [
-    "ALTER TABLE audit_log ADD COLUMN actor_email TEXT",
-    "ALTER TABLE vehicles ADD COLUMN _demo_owner TEXT",
-    "ALTER TABLE drivers ADD COLUMN _demo_owner TEXT",
-    "ALTER TABLE trips ADD COLUMN _demo_owner TEXT",
-    "ALTER TABLE fuel_logs ADD COLUMN _demo_owner TEXT",
-    "ALTER TABLE expenses ADD COLUMN _demo_owner TEXT",
-    "ALTER TABLE maintenance ADD COLUMN _demo_owner TEXT",
-    "ALTER TABLE notifications ADD COLUMN _demo_owner TEXT",
-    "ALTER TABLE users ADD COLUMN driver_id INTEGER",
-  ]) {
-    try { db.exec(stmt); } catch (_) { /* column already exists */ }
-  }
-  // Role rename: Fleet Manager → Admin — both data and CHECK constraint.
-  // SQLite can't ALTER a CHECK constraint, so the table is rebuilt in place
-  // when an old version with the wider enum is detected.
-  try {
-    const sql = db.prepare(
-      "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'"
-    ).get();
-    if (sql && /Fleet Manager/.test(sql.sql || '')) {
-      console.log('[vaelos] migrating users table CHECK constraint → Admin');
-      db.pragma('foreign_keys = OFF');
-      db.exec('BEGIN');
-      try {
-        db.exec(`CREATE TABLE users_new (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          name TEXT NOT NULL,
-          email TEXT UNIQUE NOT NULL,
-          password_hash TEXT NOT NULL,
-          role TEXT NOT NULL CHECK (role IN ('Admin','Driver')),
-          driver_id INTEGER,
-          created_at TEXT NOT NULL
-        )`);
-        db.exec(`INSERT INTO users_new (id, name, email, password_hash, role, driver_id, created_at)
-                 SELECT id, name, email, password_hash,
-                        CASE role WHEN 'Fleet Manager' THEN 'Admin'
-                                  WHEN 'Safety Officer' THEN 'Driver'
-                                  WHEN 'Financial Analyst' THEN 'Driver'
-                                  ELSE role END AS role,
-                        driver_id, created_at
-                 FROM users`);
-        db.exec('DROP TABLE users');
-        db.exec('ALTER TABLE users_new RENAME TO users');
-        db.exec('COMMIT');
-      } catch (e) {
-        db.exec('ROLLBACK');
-        throw e;
-      } finally {
-        db.pragma('foreign_keys = ON');
-      }
-    } else {
-      // Schema already current — just normalise role values for any
-      // stragglers from the old multi-role era.
-      db.exec("UPDATE users SET role='Admin' WHERE role='Fleet Manager'");
-      db.exec("UPDATE users SET role='Driver' WHERE role IN ('Safety Officer','Financial Analyst')");
-    }
-  } catch (e) {
-    console.error('[vaelos] user-table migration failed:', e && e.message || e);
+    await client.query('COMMIT');
+    console.log('[vaelos] database schema initialised ok');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('[vaelos] FATAL: database init failed:', err);
+    throw err;
+  } finally {
+    client.release();
   }
 
-  const userCount = db.prepare('SELECT COUNT(*) c FROM users').get().c;
-  if (userCount === 0) seed();
-  // Wire alex@vaelos.com → seeded driver Alex Kumar so the Driver role
-  // demo can actually log fuel/expenses against their assigned vehicle.
-  linkDriverAccounts();
-  recomputeLicenseNotifications();
+  const res = await pool.query('SELECT COUNT(*) FROM users');
+  if (parseInt(res.rows[0].count) === 0) {
+    await seed();
+  }
+  await linkDriverAccounts();
+  await recomputeLicenseNotifications();
 }
 
 // ============================== DEMO ISOLATION ============================== //
-// Demo accounts (admin, alex, sarah, felix) live in a shared DB but each
-// visitor who logs in with one of them gets their own ephemeral clone of
-// the starter fleet. Real signups see the canonical (non-demo) data.
 const DEMO_EMAILS = new Set([
   'admin@vaelos.com',
   'alex@vaelos.com',
@@ -272,138 +169,93 @@ const DEMO_SCOPE = {
 function isDemoEmail(email) {
   return email && DEMO_EMAILS.has(String(email).toLowerCase());
 }
-function ensureDemoClone(email) {
+
+async function ensureDemoClone(email) {
   const e = String(email || '').toLowerCase();
   if (!isDemoEmail(e)) return;
-  const existing = db.prepare('SELECT email FROM demo_sessions WHERE email=?').get(e);
-  const now = new Date().toISOString().slice(0, 19);
-  if (!existing) {
+
+  const existing = await pool.query('SELECT email FROM demo_sessions WHERE email=$1', [e]);
+  if (existing.rows.length === 0) {
     const scope = DEMO_SCOPE[e];
-    db.prepare('INSERT INTO demo_sessions (email, scope, created_at) VALUES (?,?,?)')
-      .run(e, scope, now);
-  }
+    await pool.query('INSERT INTO demo_sessions (email, scope) VALUES ($1, $2)', [e, scope]);
 
-  // First-time clone of all seed rows so the demo user has their own
-  // workspace. Skipped on subsequent logins (existing !== null) because
-  // their prior clones persist.
-  if (!existing) {
-    const clone = (table, idCol, rowMapper) => {
-      const rows = db.prepare(`SELECT * FROM ${table} WHERE _demo_owner IS NULL`).all();
-      for (const r of rows) {
-        const mapped = rowMapper(r);
-        db.prepare(
-          `INSERT INTO ${table} (_demo_owner, ${Object.keys(mapped).join(',')})` +
-          ` VALUES (?, ${Object.keys(mapped).map(() => '?').join(',')})`
-        ).run(e, ...Object.values(mapped));
+    const tablesToClone = [
+      { table: 'vehicles', cols: ['reg_no', 'name', 'type', 'max_load_kg', 'odometer_km', 'acquisition_cost', 'region', 'status', 'created_at'] },
+      { table: 'drivers', cols: ['name', 'license_no', 'license_category', 'license_expiry', 'contact', 'safety_score', 'status', 'created_at'] },
+      { table: 'maintenance', cols: ['vehicle_id', 'description', 'cost', 'start_date', 'end_date', 'status', 'notes', 'created_at'] },
+      { table: 'trips', cols: ['source', 'destination', 'vehicle_id', 'driver_id', 'cargo_kg', 'planned_distance_km', 'status', 'start_odometer', 'end_odometer', 'fuel_used_liters', 'revenue', 'dispatched_at', 'completed_at', 'created_at'] },
+      { table: 'fuel_logs', cols: ['vehicle_id', 'trip_id', 'liters', 'cost', 'log_date', 'odometer_km', 'created_at'] },
+      { table: 'expenses', cols: ['vehicle_id', 'trip_id', 'category', 'description', 'amount', 'expense_date', 'created_at'] },
+    ];
+
+    for (const { table, cols } of tablesToClone) {
+      const rows = await pool.query(`SELECT * FROM ${table} WHERE _demo_owner IS NULL`);
+      for (const r of rows.rows) {
+        const values = cols.map(c => r[c]);
+        const placeholders = cols.map((_, i) => `$${i + 2}`).join(',');
+        await pool.query(
+          `INSERT INTO ${table} (_demo_owner, ${cols.join(',')}) VALUES ($1, ${placeholders})`,
+          [e, ...values]
+        );
       }
-    };
-
-    clone('vehicles', 'id', (v) => ({
-      reg_no: v.reg_no, name: v.name, type: v.type,
-      max_load_kg: v.max_load_kg, odometer_km: v.odometer_km,
-      acquisition_cost: v.acquisition_cost, region: v.region,
-      status: v.status, created_at: v.created_at,
-    }));
-    clone('drivers', 'id', (d) => ({
-      name: d.name, license_no: d.license_no, license_category: d.license_category,
-      license_expiry: d.license_expiry, contact: d.contact,
-      safety_score: d.safety_score, status: d.status, created_at: d.created_at,
-    }));
-    clone('maintenance', 'id', (m) => ({
-      vehicle_id: m.vehicle_id, description: m.description, cost: m.cost,
-      start_date: m.start_date, end_date: m.end_date, status: m.status,
-      notes: m.notes, created_at: m.created_at,
-    }));
-    clone('trips', 'id', (t) => ({
-      source: t.source, destination: t.destination, vehicle_id: t.vehicle_id,
-      driver_id: t.driver_id, cargo_kg: t.cargo_kg,
-      planned_distance_km: t.planned_distance_km, status: t.status,
-      start_odometer: t.start_odometer, end_odometer: t.end_odometer,
-      fuel_used_liters: t.fuel_used_liters, revenue: t.revenue,
-      dispatched_at: t.dispatched_at, completed_at: t.completed_at,
-      created_at: t.created_at,
-    }));
-    clone('fuel_logs', 'id', (f) => ({
-      vehicle_id: f.vehicle_id, trip_id: f.trip_id, liters: f.liters,
-      cost: f.cost, log_date: f.log_date, odometer_km: f.odometer_km,
-      created_at: f.created_at,
-    }));
-    clone('expenses', 'id', (x) => ({
-      vehicle_id: x.vehicle_id, trip_id: x.trip_id, category: x.category,
-      description: x.description, amount: x.amount, expense_date: x.expense_date,
-      created_at: x.created_at,
-    }));
+    }
   }
-
-  // Always recompute license notifications for the demo's cloned drivers —
-  // their expiry dates move day-to-day, so refreshing on every login keeps
-  // the bell badge accurate.
-  recomputeDemoLicenseNotifications(e);
+  await recomputeDemoLicenseNotifications(e);
 }
 
-function recomputeDemoLicenseNotifications(email) {
+async function recomputeDemoLicenseNotifications(email) {
   const e = String(email).toLowerCase();
-  db.prepare(`DELETE FROM notifications WHERE _demo_owner = ?`).run(e);
-  const drivers = db.prepare(
-    `SELECT id, name, license_no, license_expiry FROM drivers WHERE _demo_owner = ?`
-  ).all(e);
-  const today = new Date();
-  const ins = db.prepare(
-    `INSERT INTO notifications (kind, message, target_id, created_at, read, _demo_owner)
-     VALUES (?,?,?,?,?,?)`
+  await pool.query(`DELETE FROM notifications WHERE _demo_owner = $1`, [e]);
+  const res = await pool.query(
+    `SELECT id, name, license_no, license_expiry FROM drivers WHERE _demo_owner = $1`, [e]
   );
-  const now = new Date().toISOString().slice(0, 19);
-  for (const d of drivers) {
+  const today = new Date();
+  const now = new Date().toISOString();
+  for (const d of res.rows) {
     if (!d.license_expiry) continue;
     const exp = new Date(d.license_expiry);
     const delta = Math.floor((exp - today) / (1000 * 3600 * 24));
     if (delta < 0) {
-      ins.run('license_expiry',
-        `EXPIRED: ${d.name} (${d.license_no}) — expired ${-delta} days ago.`,
-        d.id, now, 0, e);
+      await pool.query(
+        `INSERT INTO notifications (kind, message, target_id, created_at, read, _demo_owner) VALUES ($1,$2,$3,$4,$5,$6)`,
+        ['license_expiry', `EXPIRED: ${d.name} (${d.license_no}) — expired ${-delta} days ago.`, d.id, now, 0, e]
+      );
     } else if (delta <= 60) {
-      ins.run('license_expiry',
-        `Expiring soon: ${d.name} (${d.license_no}) — expires in ${delta} days.`,
-        d.id, now, 0, e);
+      await pool.query(
+        `INSERT INTO notifications (kind, message, target_id, created_at, read, _demo_owner) VALUES ($1,$2,$3,$4,$5,$6)`,
+        ['license_expiry', `Expiring soon: ${d.name} (${d.license_no}) — expires in ${delta} days.`, d.id, now, 0, e]
+      );
     }
   }
 }
 
-function linkDriverAccounts() {
-  // Map alex@vaelos.com → seeded driver Alex Kumar so the demo Driver
-  // account can post fuel/expenses against their assigned vehicle.
-  const driver = db.prepare("SELECT id FROM drivers WHERE license_no='DL-042018'").get();
-  if (driver) {
-    db.prepare("UPDATE users SET driver_id = ? WHERE email = 'alex@vaelos.com'")
-      .run(driver.id);
+async function linkDriverAccounts() {
+  const res = await pool.query("SELECT id FROM drivers WHERE license_no='DL-042018'");
+  if (res.rows.length > 0) {
+    await pool.query("UPDATE users SET driver_id = $1 WHERE email = 'alex@vaelos.com'", [res.rows[0].id]);
   }
 }
 
-// demoFilter(email, alias='_demo_owner'):
-// Returns { where, args } where the filter is fully qualified so it works in
-// JOINs where multiple tables carry the column. Pass the primary table's
-// alias so the prefix is correct; default '_demo_owner' resolves on
-// single-table queries.
 function demoFilter(email, alias) {
   const col = alias ? `${alias}._demo_owner` : '_demo_owner';
   if (isDemoEmail(email)) {
-    return { where: `${col} = ?`, args: [String(email).toLowerCase()] };
+    return { where: `${col} = $1`, args: [String(email).toLowerCase()] };
   }
   return { where: `${col} IS NULL`, args: [] };
 }
 
-function seed() {
-  const now = new Date().toISOString().slice(0, 19);
+async function seed() {
+  const nowStr = new Date().toISOString();
   const hash = (pw) => bcrypt.hashSync(pw, 10);
 
   const users = [
     ['Admin Vaelos', 'admin@vaelos.com', 'admin123', 'Admin'],
     ['Alex Driver',  'alex@vaelos.com',  'driver123', 'Driver'],
   ];
-  const insUser = db.prepare(
-    'INSERT INTO users (name,email,password_hash,role,created_at) VALUES (?,?,?,?,?)'
-  );
-  for (const [n, e, p, r] of users) insUser.run(n, e, hash(p), r, now);
+  for (const [n, e, p, r] of users) {
+    await pool.query('INSERT INTO users (name,email,password_hash,role,created_at) VALUES ($1,$2,$3,$4,$5)',
+      [n, e, hash(p), r, nowStr]);
+  }
 
   const today = new Date();
   const days = (n) => {
@@ -419,12 +271,12 @@ function seed() {
     ['VLS-21', 'Vaelos Haul Master',  'Truck', 5000, 78100, 145000, 'West',    'In Shop'],
     ['VLS-03', 'Vaelos City Cruiser', 'Car',   400,  32000, 9500,   'Central', 'Available'],
   ];
-  const insV = db.prepare(
-    `INSERT INTO vehicles
-     (reg_no,name,type,max_load_kg,odometer_km,acquisition_cost,region,status,created_at)
-     VALUES (?,?,?,?,?,?,?,?,?)`
-  );
-  for (const v of vehicles) insV.run(...v, now);
+  for (const v of vehicles) {
+    await pool.query(
+      `INSERT INTO vehicles (reg_no,name,type,max_load_kg,odometer_km,acquisition_cost,region,status,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [...v, nowStr]
+    );
+  }
 
   const drivers = [
     ['Alex Kumar',     'DL-042018', 'LMV', days(300),  '+91-9876500011', 88.5, 'Available'],
@@ -433,97 +285,94 @@ function seed() {
     ['Mohammed Ali',   'DL-092022', 'HMV', days(720),  '+91-9876500044', 81.0, 'Available'],
     ['Neha Verma',     'DL-052020', 'LMV', days(15),   '+91-9876500055', 70.0, 'Suspended'],
   ];
-  const insD = db.prepare(
-    `INSERT INTO drivers
-     (name,license_no,license_category,license_expiry,contact,safety_score,status,created_at)
-     VALUES (?,?,?,?,?,?,?,?)`
+  for (const d of drivers) {
+    await pool.query(
+      `INSERT INTO drivers (name,license_no,license_category,license_expiry,contact,safety_score,status,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [...d, nowStr]
+    );
+  }
+
+  const v21Res = await pool.query("SELECT id FROM vehicles WHERE reg_no='VLS-21'");
+  const trk21 = v21Res.rows[0].id;
+  await pool.query(
+    `INSERT INTO maintenance (vehicle_id,description,cost,start_date,status,notes,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [trk21, 'Brake Pad Replacement', 8500, days(0), 'Open', 'Reported squeaking noise during last trip.', nowStr]
   );
-  for (const d of drivers) insD.run(...d, now);
 
-  const trk21 = db.prepare("SELECT id FROM vehicles WHERE reg_no='VLS-21'").get().id;
-  db.prepare(
-    `INSERT INTO maintenance
-     (vehicle_id,description,cost,start_date,end_date,status,notes,created_at)
-     VALUES (?,?,?,?,?,?,?,?)`
-  ).run(trk21, 'Brake Pad Replacement', 8500, days(0), null, 'Open',
-        'Reported squeaking noise during last trip.', now);
+  const v5Res = await pool.query("SELECT id FROM vehicles WHERE reg_no='VLS-05'");
+  const van5 = v5Res.rows[0].id;
+  const dAlexRes = await pool.query("SELECT id FROM drivers WHERE license_no='DL-042018'");
+  const alex = dAlexRes.rows[0].id;
+  const dispAt = new Date(Date.now() - 10 * 24 * 3600 * 1000).toISOString();
+  const compAt = new Date(Date.now() - 10 * 24 * 3600 * 1000 + 6 * 3600 * 1000).toISOString();
 
-  const van5 = db.prepare("SELECT id FROM vehicles WHERE reg_no='VLS-05'").get().id;
-  const alex = db.prepare("SELECT id FROM drivers WHERE license_no='DL-042018'").get().id;
-  const dispAt = new Date(Date.now() - 10 * 24 * 3600 * 1000).toISOString().slice(0, 19);
-  const compAt = new Date(Date.now() - 10 * 24 * 3600 * 1000 + 6 * 3600 * 1000).toISOString().slice(0, 19);
-  const tripRes = db.prepare(
-    `INSERT INTO trips
-     (source,destination,vehicle_id,driver_id,cargo_kg,planned_distance_km,status,
-      start_odometer,end_odometer,fuel_used_liters,revenue,dispatched_at,completed_at,created_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-  ).run('Mumbai Warehouse', 'Pune Depot', van5, alex, 420, 180, 'Completed',
-        12000, 12180, 22.5, 12500, dispAt, compAt, dispAt);
+  const tripRes = await pool.query(
+    `INSERT INTO trips (source,destination,vehicle_id,driver_id,cargo_kg,planned_distance_km,status, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6, 'Completed', $7) RETURNING id`,
+    ['Mumbai Warehouse', 'Pune Depot', van5, alex, 420, 180, dispAt]
+  );
+  const tripId = tripRes.rows[0].id;
 
-  db.prepare(
-    `INSERT INTO fuel_logs
-     (vehicle_id,trip_id,liters,cost,log_date,odometer_km,created_at)
-     VALUES (?,?,?,?,?,?,?)`
-  ).run(van5, tripRes.lastInsertRowid, 22.5, 2812.5, days(0), 12180, now);
+  // In the original code, this trip was created as 'Completed' for seeding purposes
+  await pool.query(
+    `UPDATE trips SET start_odometer=$1, end_odometer=$2, fuel_used_liters=$3, revenue=$4, dispatched_at=$5, completed_at=$6 WHERE id=$7`,
+    [12000, 12180, 22.5, 12500, dispAt, compAt, tripId]
+  );
 
-  db.prepare(
-    `INSERT INTO expenses
-     (vehicle_id,category,description,amount,expense_date,created_at)
-     VALUES (?,?,?,?,?,?)`
-  ).run(van5, 'Toll', 'Mumbai-Pune Expressway toll', 380, days(0), now);
-  db.prepare(
-    `INSERT INTO expenses
-     (vehicle_id,category,description,amount,expense_date,created_at)
-     VALUES (?,?,?,?,?,?)`
-  ).run(van5, 'Misc', 'Driver allowance', 500, days(0), now);
+  await pool.query(
+    `INSERT INTO fuel_logs (vehicle_id,trip_id,liters,cost,log_date,odometer_km,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [van5, tripId, 22.5, 2812.5, days(0), 12180, nowStr]
+  );
+
+  await pool.query(
+    `INSERT INTO expenses (vehicle_id,category,description,amount,expense_date,created_at) VALUES ($1,$2,$3,$4,$5,$6)`,
+    [van5, 'Toll', 'Mumbai-Pune Expressway toll', 380, days(0), nowStr]
+  );
+  await pool.query(
+    `INSERT INTO expenses (vehicle_id,category,description,amount,expense_date,created_at) VALUES ($1,$2,$3,$4,$5,$6)`,
+    [van5, 'Misc', 'Driver allowance', 500, days(0), nowStr]
+  );
 }
 
-function recomputeLicenseNotifications() {
-  // Only touch GLOBAL notifications. Demo-owned notifications are managed
-  // per user by recomputeDemoLicenseNotifications(email) on each demo login.
-  db.prepare("DELETE FROM notifications WHERE kind = 'license_expiry' AND _demo_owner IS NULL").run();
-  const drivers = db.prepare(
-    'SELECT id,name,license_no,license_expiry FROM drivers WHERE _demo_owner IS NULL'
-  ).all();
+async function recomputeLicenseNotifications() {
+  await pool.query("DELETE FROM notifications WHERE kind = 'license_expiry' AND _demo_owner IS NULL");
+  const res = await pool.query('SELECT id,name,license_no,license_expiry FROM drivers WHERE _demo_owner IS NULL');
   const today = new Date();
-  const ins = db.prepare(
-    `INSERT INTO notifications (kind,message,target_id,created_at,read)
-     VALUES (?,?,?,?,0)`
-  );
-  const now = new Date().toISOString().slice(0, 19);
-  for (const d of drivers) {
+  const now = new Date().toISOString();
+  for (const d of res.rows) {
     const exp = new Date(d.license_expiry);
     const delta = Math.floor((exp - today) / (1000 * 3600 * 24));
     if (delta < 0) {
-      ins.run('license_expiry',
-        `EXPIRED: ${d.name} (${d.license_no}) — expired ${-delta} days ago.`,
-        d.id, now);
+      await pool.query(
+        `INSERT INTO notifications (kind,message,target_id,created_at,read) VALUES ($1,$2,$3,$4,0)`,
+        ['license_expiry', `EXPIRED: ${d.name} (${d.license_no}) — expired ${-delta} days ago.`, d.id, now]
+      );
     } else if (delta <= 60) {
-      ins.run('license_expiry',
-        `Expiring soon: ${d.name} (${d.license_no}) — expires in ${delta} days.`,
-        d.id, now);
+      await pool.query(
+        `INSERT INTO notifications (kind,message,target_id,created_at,read) VALUES ($1,$2,$3,$4,0)`,
+        ['license_expiry', `Expiring soon: ${d.name} (${d.license_no}) — expires in ${delta} days.`, d.id, now]
+      );
     }
   }
 }
 
-function verifyUser(email, password) {
-  const u = db.prepare('SELECT * FROM users WHERE email = ?').get(email.toLowerCase().trim());
+async function verifyUser(email, password) {
+  const res = await pool.query('SELECT * FROM users WHERE email = $1', [email.toLowerCase().trim()]);
+  const u = res.rows[0];
   if (!u) return null;
   if (!bcrypt.compareSync(password, u.password_hash)) return null;
   const { password_hash, ...safe } = u;
   return safe;
 }
 
-function writeAudit(actor, entity, entity_id, action, message) {
-  db.prepare(
-    `INSERT INTO audit_log (actor_id,actor_name,actor_email,entity,entity_id,action,message,created_at)
-     VALUES (?,?,?,?,?,?,?,?)`
-  ).run(actor?.id || null, actor?.name || 'system', actor?.email || null,
-        entity, entity_id || null,
-        action, message || '', new Date().toISOString().slice(0, 19));
+async function writeAudit(actor, entity, entity_id, action, message) {
+  await pool.query(
+    `INSERT INTO audit_log (actor_id,actor_name,actor_email,entity,entity_id,action,message,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7, CURRENT_TIMESTAMP)`,
+    [actor?.id || null, actor?.name || 'system', actor?.email || null, entity, entity_id || null, action, message || '']
+  );
 }
 
 module.exports = {
-  db, init, verifyUser, recomputeLicenseNotifications, writeAudit,
+  pool, init, verifyUser, recomputeLicenseNotifications, writeAudit,
   isDemoEmail, ensureDemoClone, demoFilter, DEMO_EMAILS, linkDriverAccounts,
 };

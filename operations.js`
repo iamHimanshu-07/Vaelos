@@ -713,6 +713,7 @@ async function aiAsk(question) {
     }
   }
 
+  // Vehicle detail check (Simplified for Postgres)
   const vMatch = low.match(/\b(vls[-\s]?\d+|[a-z]{2,3}[-\s]?\d{2,4})\b/i);
   if (vMatch) {
     const reg = vMatch[1].toUpperCase().replace(/\s+/g, '-');
