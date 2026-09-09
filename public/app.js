@@ -1120,8 +1120,7 @@ async function renderMap(c) {
   }).setView([22.5937, 78.9629], 5);
 
   // Light, road-style tiles — closest free aesthetic to Google Maps.
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-    subdomains: 'abcd',
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
   }).addTo(state.map);
 

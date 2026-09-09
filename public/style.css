@@ -1060,6 +1060,7 @@ hr.sep { border: 0; border-top: 1px solid var(--border); margin: 1rem 0; }
   border-radius: 14px;
   overflow: hidden;
   font-family: inherit;
+  filter: saturate(0.6) brightness(1.1) contrast(0.9);
 }
 .map-shell .leaflet-control-zoom {
   border: none !important;
