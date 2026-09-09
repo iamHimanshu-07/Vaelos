@@ -36,6 +36,7 @@ app.use(express.json());
 app.use(cookieParser());
 
 const JWT_SECRET = process.env.JWT_SECRET || 'vaelos-dev-secret-change-me';
+const OWNER_EMAIL = 'itshimanshu666@gmail.com';
 
 // Simple live-broadcast hub
 const liveHub = {
@@ -66,6 +67,14 @@ function requireRole(...roles) {
     }
     next();
   };
+}
+
+function requireOwner(req, res, next) {
+  if (req.user?.email?.toLowerCase() !== OWNER_EMAIL.toLowerCase()) {
+    console.warn(`[auth] Owner-only access denied for user ${req.user?.email}`);
+    return res.status(403).json({ error: 'Forbidden: Owner access required' });
+  }
+  next();
 }
 
 // helper: broadcast after every mutation
@@ -139,13 +148,13 @@ app.post('/api/auth/logout', (req, res) => {
 app.get('/api/auth/me', authRequired, (req, res) => res.json({ user: req.user }));
 
 // ----------------------------- USERS ----------------------------- //
-app.get('/api/users', authRequired, requireRole('Admin'), async (req, res) =>
+app.get('/api/users', authRequired, requireOwner, async (req, res) =>
   res.json(await ops.listUsers()));
-app.post('/api/users', authRequired, requireRole('Admin'), async (req, res) => {
+app.post('/api/users', authRequired, requireOwner, async (req, res) => {
   try { await ops.addUser(ctx(req), req.body); broadcast('user.create'); res.json({ ok: true }); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
-app.delete('/api/users/:id', authRequired, requireRole('Admin'), async (req, res) => {
+app.delete('/api/users/:id', authRequired, requireOwner, async (req, res) => {
   await ops.deleteUser(ctx(req), +req.params.id); broadcast('user.delete'); res.json({ ok: true });
 });
 
@@ -253,9 +262,9 @@ app.get('/api/notifications', authRequired, async (req, res) =>
 app.post('/api/notifications/read-all', authRequired, async (req, res) => {
   await ops.markAllNotificationsRead(req.user.email); res.json({ ok: true });
 });
-app.get('/api/audit', authRequired, requireRole('Admin'), async (req, res) => {
+app.get('/api/audit', authRequired, requireOwner, async (req, res) => {
   const wantAll = String(req.query.scope || '').toLowerCase() === 'all';
-  const isOwner = String(req.user.email || '').toLowerCase() === 'itshimanshu666@gmail.com';
+  const isOwner = String(req.user.email || '').toLowerCase() === OWNER_EMAIL.toLowerCase();
   const scope = (wantAll && isOwner) ? 'all' : 'me';
   try {
     const rows = await ops.listAudit(+req.query.limit || 100, { scope, actorEmail: req.user.email });
