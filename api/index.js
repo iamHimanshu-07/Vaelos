@@ -59,8 +59,11 @@ function authRequired(req, res, next) {
 }
 function requireRole(...roles) {
   return (req, res, next) => {
-    if (!req.user || !roles.includes(req.user.role))
-      return res.status(403).json({ error: 'Forbidden' });
+    const userRole = req.user?.role;
+    if (!userRole || !roles.some(r => r.toLowerCase() === String(userRole).toLowerCase())) {
+      console.warn(`[auth] Access denied for user ${req.user?.email} (Role: ${userRole}) to role-protected route. Required: ${roles.join(', ')}`);
+      return res.status(403).json({ error: 'Forbidden: Admin access required' });
+    }
     next();
   };
 }
@@ -250,7 +253,7 @@ app.get('/api/notifications', authRequired, async (req, res) =>
 app.post('/api/notifications/read-all', authRequired, async (req, res) => {
   await ops.markAllNotificationsRead(req.user.email); res.json({ ok: true });
 });
-app.get('/api/audit', authRequired, async (req, res) => {
+app.get('/api/audit', authRequired, requireRole('Admin'), async (req, res) => {
   const wantAll = String(req.query.scope || '').toLowerCase() === 'all';
   const isOwner = String(req.user.email || '').toLowerCase() === 'itshimanshu666@gmail.com';
   const scope = (wantAll && isOwner) ? 'all' : 'me';

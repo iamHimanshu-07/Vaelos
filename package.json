@@ -15,7 +15,7 @@
   },
   "dependencies": {
     "@vercel/analytics": "^2.0.1",
-    "@vercel/config": "^0.7.0",
+    "@vercel/config": "^0.0.32",
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.7",
     "express": "^4.21.0",
@@ -29,5 +29,8 @@
     "url": "https://github.com/iamHimanshu-07/Vaelos.git"
   },
   "author": "Himanshu",
-  "license": "MIT"
+  "license": "MIT",
+  "overrides": {
+    "qs": "^6.16.0"
+  }
 }
