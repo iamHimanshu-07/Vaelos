@@ -37,6 +37,9 @@
 ## 🚀 Quick start
 
 ```bash
+git clone https://github.com/HimanshuSinghYadav7/Vaelos.git
+cd Vaelos
+python -m venv .venv && source .venv/bin/activate   # or: .venv\Scripts\activate on Windows
 npm install
 npm start            # http://localhost:3000
 ```
